@@ -1249,16 +1249,16 @@ def _bake_pass(ob, mesh, img, bake_type, **kw):
 def _light_reference(out_dir):
     """Bake a tiny lighting map of a sunlit horizontal plane above the scene; returns its mean."""
     bm = bmesh.new()
-    bm_box(bm, (0, 0, 80.0), (4.0, 4.0, 0.05), "white")
+    bm_face(bm, [(-2, -2), (2, -2), (2, 2), (-2, 2)], 80.0, "white")   # single sunlit top face
     mesh = finish_mesh("M_LightRef", bm)
     ob = add_obj("LightRef", mesh, "Pools")
     _unwrap(ob)
-    img = _new_image("bk_lightref", 16, out_dir, color=False)
+    img = _new_image("bk_lightref", 32, out_dir, color=False)
+    img.use_generated_float = True
     _bake_pass(ob, mesh, img, "DIFFUSE", pass_filter={"DIRECT", "INDIRECT"})
     px = list(img.pixels)
-    vals = [px[i] for i in range(0, len(px), 4)]
-    vals.sort()
-    ref = vals[len(vals) // 2]
+    vals = sorted(px[i] for i in range(0, len(px), 4) if px[i] > 0.02)
+    ref = vals[len(vals) // 2] if vals else 1.0
     bpy.data.images.remove(img)
     bpy.data.objects.remove(ob)
     bpy.data.meshes.remove(mesh)
@@ -1271,11 +1271,13 @@ def _composite_lighting(col_path, light_path, out_path):
     from PIL import Image
     import numpy as np
     col = np.asarray(Image.open(col_path).convert("RGB"), dtype=np.float32) / 255.0
-    lit = Image.open(light_path).convert("RGB").resize(Image.open(col_path).size, Image.BILINEAR)
+    from PIL import ImageFilter
+    lit = Image.open(light_path).convert("RGB").filter(ImageFilter.GaussianBlur(1.0))   # cheap denoise
+    lit = lit.resize(Image.open(col_path).size, Image.BILINEAR)
     lit = np.asarray(lit, dtype=np.float32) / 255.0
     lin = np.where(col <= 0.04045, col / 12.92, ((col + 0.055) / 1.055) ** 2.4)
     # soften: keep 20% ambient floor so shadows do not go black, and allow a little over-bright
-    light = 0.2 + 0.95 * np.clip(lit, 0.0, 1.2)
+    light = 0.18 + 1.05 * np.clip(lit, 0.0, 1.0)
     out = np.clip(lin * light, 0.0, 1.0)
     srgb = np.where(out <= 0.0031308, out * 12.92, 1.055 * out ** (1 / 2.4) - 0.055)
     Image.fromarray((srgb * 255 + 0.5).astype(np.uint8)).save(out_path)
@@ -1313,7 +1315,7 @@ def bake_all(out_dir, base_res, bake_light=True):
         # Normalise the lighting bake so an unshadowed horizontal surface lands near 0.9
         scene.cycles.samples = 16
         ref = _light_reference(out_dir)
-        k = 0.9 / ref
+        k = 0.78 / ref
         if sun:
             sun.data.energy *= k
         if world_bg:
@@ -1336,9 +1338,9 @@ def bake_all(out_dir, base_res, bake_light=True):
         for img in (col, nrm, rgh):
             img.save()
         if bake_light:
-            res_l = max(64, min(1024, res // 4))
+            res_l = max(64, min(1024, res // 2))
             lit = _new_image("bk_%s_lit" % tag, res_l, out_dir, color=False)
-            scene.cycles.samples = 16
+            scene.cycles.samples = 24
             _bake_pass(ob, mesh, lit, "DIFFUSE", pass_filter={"DIRECT", "INDIRECT"})
             lit.save()
             lit_col_path = os.path.join(out_dir, "bk_%s_litcol.png" % tag)

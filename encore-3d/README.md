@@ -99,6 +99,16 @@ python -m http.server 8000     # then open http://localhost:8000/index.html
   and roughness from the procedural materials into PNGs (512 px for furniture, up to 4096 px for
   the deck and tower), swaps in image-based materials and exports `encore-beach-club-photo.glb`.
   Instances share their prototype's textures, so each furniture type is baked once.
+- The bake also captures **lighting**: sun, sky and bounced light (so shadows and ambient
+  occlusion) are baked at half resolution, normalised against a reference plane, blurred and
+  multiplied into the colour maps. The web viewer therefore shows the Cycles shadows without
+  computing them; it only adds a weak sun for speculars. `--no-bake-light` gives flat albedo.
+- When baking, `WEB_TEX` switches the procedural materials to coarser, higher-contrast features
+  (bigger tiles with darker grout, wider wicker weave, quilted cushions) so they read at map
+  distance.
+- The Sun is exported as a `KHR_lights_punctual` light so the viewer's specular direction
+  matches the baked shadows. The water plane gets planar UVs and `water_normal.png`, a
+  generated tileable ripple normal map that the viewer scrolls for animated water.
 - Ubuntu's Blender build has no Draco encoder and the exporter writes PNGs, so the raw photo
   GLB is 174 MB. The committed file was post-processed with
   `gltf-transform webp --quality 85` and `gltf-transform draco`, which brings it to 8.3 MB.
