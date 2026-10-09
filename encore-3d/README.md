@@ -25,7 +25,9 @@ Two looks are built from the same layout data:
 | `encore-beach-club.blend` | Saved Blender scene, stylized look |
 | `encore-beach-club-photo.blend` | Saved Blender scene, photo look (open and render with Cycles) |
 | `encore-beach-club.glb` | Web asset: Draco mesh compression, WebP palette texture, custom properties as extras |
-| `index.html` + `vendor/` | Minimal Three.js viewer: orbit, click-to-highlight a table, find-by-number, roof toggle |
+| `encore-beach-club-photo.glb` | Web asset with the photo look: baked colour, normal and roughness textures per mesh |
+| `bake/` | The baked PNG textures (also packed inside the photo GLB and .blend) |
+| `index.html` + `vendor/` | Three.js viewer: orbit, click-to-highlight, find-by-number, roof toggle, look switch (photo / stylized), image-based lighting and shadows |
 | `renders/` | Stage 1 blockout and stage 2 full renders, side-by-side comparisons with the plan, viewer screenshot, uncompressed GLB for size comparison |
 | `refs/` | Floor plan reference, Wynn property map, `SOURCES.md`, `layout-notes.md` (pixel-to-metre calibration and the table list) |
 | `palette.png` | The 64 x 64 colour atlas used by the single `Atlas` material |
@@ -38,7 +40,8 @@ Two looks are built from the same layout data:
 | 2 full | `renders/encore-beach-club-uncompressed.glb` (no Draco) | 265 KB |
 | 2 full | **`encore-beach-club.glb` (Draco + WebP), the deliverable** | **96 KB** |
 | 2 full | `encore-beach-club.blend` | 154 KB |
-| photo | `encore-beach-club-photo.blend` (procedural materials, no GLB) | ~330 KB |
+| photo | `encore-beach-club-photo.blend` (procedural materials) | ~360 KB |
+| photo, baked | `encore-beach-club-photo.glb` (baked PNG textures, no Draco) | see below |
 
 Budget was 10 MB (stretch 5 MB, mobile first-load 8 MB). The final GLB is about 1% of the budget.
 The viewer page itself is dominated by the vendored Three.js build (about 2.2 MB, cacheable), not
@@ -69,6 +72,7 @@ Cycles renders; the photo look at 64 samples takes about 45 minutes for its thre
 ```
 blender -b --python build_encore.py -- --stage full                 # stylized + GLB
 blender -b --python build_encore.py -- --stage full --look photo --samples 64
+blender -b --python build_encore.py -- --look photo --bake --no-render      # textured GLB (~20 min)
 blender -b --python build_encore.py -- --look photo --cameras eyelevel --samples 16   # quick check
 # or, with the pip wheel (python 3.11):  pip install bpy
 python build_encore.py -- --stage full [--samples 48] [--no-render] [--out DIR]
@@ -79,7 +83,8 @@ The script runs on Blender 4.0 (Ubuntu apt package) and on the Blender 5.0 `bpy`
 Blender is built without OpenImageDenoise, so on that build the script disables denoising and
 doubles the sample count instead.
 
-Viewer (must be served over HTTP because the page fetches the GLB and Draco decoder):
+Viewer (must be served over HTTP because the page fetches the GLB and Draco decoder). It loads
+the photo GLB by default and falls back to the stylized one; `?look=stylized` picks it directly.
 
 ```
 python -m http.server 8000     # then open http://localhost:8000/index.html
@@ -87,8 +92,12 @@ python -m http.server 8000     # then open http://localhost:8000/index.html
 
 ## Photo look notes
 
-- The GLB is only exported for the stylized look: procedural node materials do not survive
-  glTF export. Baking them to image textures is the next step if a textured web asset is wanted.
+- `--bake` unwraps every unique mesh (Smart UV Project), bakes base colour, tangent-space normal
+  and roughness from the procedural materials into PNGs (512 px for furniture, up to 4096 px for
+  the deck and tower), swaps in image-based materials and exports `encore-beach-club-photo.glb`.
+  Instances share their prototype's textures, so each furniture type is baked once.
+- Ubuntu's Blender build has no Draco encoder, so the photo GLB is uncompressed; running it
+  through `gltf-transform draco` or re-exporting from the `bpy` wheel would shrink geometry.
 - Water uses a refractive Principled surface that is transparent to shadow rays (Light Path
   node), so sunlight reaches the turquoise plaster basin without refractive caustics.
 - The Encore tower, casino block and surrounding ground are rough placeholders for context only;

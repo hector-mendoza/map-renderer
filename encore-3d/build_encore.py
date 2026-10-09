@@ -288,11 +288,6 @@ def add_obj(name, mesh, collection, loc=(0, 0, 0), rot_z=0.0, props=None):
     if props:
         for k, v in props.items():
             ob[k] = v
-    if LOOK == "photo" and (name.startswith("T_") or name.startswith("Umbrella")):
-        bev = ob.modifiers.new("bevel", "BEVEL")
-        bev.width = 0.03
-        bev.segments = 2
-        bev.limit_method = "ANGLE"
     STATS["objects"] += 1
     return ob
 
@@ -302,6 +297,12 @@ def proto(name, builder, material="Atlas"):
     if name not in PROTOS:
         bm = bmesh.new()
         builder(bm)
+        if LOOK == "photo" and name != "palm":
+            bm.normal_update()
+            edges = [e for e in bm.edges if e.is_boundary or
+                     (len(e.link_faces) == 2 and e.calc_face_angle(0.0) > math.radians(30))]
+            bmesh.ops.bevel(bm, geom=edges, offset=0.025, segments=2, affect="EDGES",
+                            profile=0.6, material=-1)
         PROTOS[name] = finish_mesh("M_" + name, bm, material)
     return PROTOS[name]
 
@@ -1154,6 +1155,164 @@ def build_context():
         add_obj("PalmCtx_%02d" % i, mesh, "Context", (x, y, -0.3), math.radians((i * 71) % 360))
 
 
+
+# --------------------------------------------------------------------------------------
+# Baking: procedural materials -> image textures, so the photo look survives glTF export
+# --------------------------------------------------------------------------------------
+BAKE_SKIP = {"M_PoolWater", "M_Ground", "M_Cutter"}
+
+
+def _bake_res_for(mesh, base):
+    xs = [v.co.x for v in mesh.vertices]
+    ys = [v.co.y for v in mesh.vertices]
+    zs = [v.co.z for v in mesh.vertices]
+    if not xs:
+        return base // 2
+    extent = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
+    if extent > 60:
+        return base * 4
+    if extent > 20:
+        return base * 2
+    if extent > 6:
+        return base
+    return base // 2
+
+
+def _unwrap(ob):
+    bpy.ops.object.select_all(action="DESELECT")
+    ob.select_set(True)
+    bpy.context.view_layer.objects.active = ob
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=0.01,
+                             correct_aspect=True, scale_to_bounds=False)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def _new_image(name, res, out_dir, color=True):
+    img = bpy.data.images.new(name, res, res, alpha=False, float_buffer=False)
+    img.colorspace_settings.name = "sRGB" if color else "Non-Color"
+    img.filepath_raw = os.path.join(out_dir, name + ".png")
+    img.file_format = "PNG"
+    return img
+
+
+def _bake_pass(ob, mesh, img, bake_type, **kw):
+    """Point every material slot's active image node at `img`, then bake."""
+    nodes = []
+    for mat in mesh.materials:
+        if mat is None or not mat.use_nodes:
+            continue
+        nt = mat.node_tree
+        tex = nt.nodes.new("ShaderNodeTexImage")
+        tex.image = img
+        nt.nodes.active = tex
+        nodes.append((nt, tex))
+    bpy.ops.object.select_all(action="DESELECT")
+    ob.select_set(True)
+    bpy.context.view_layer.objects.active = ob
+    bpy.ops.object.bake(type=bake_type, margin=8, use_clear=True, use_selected_to_active=False, **kw)
+    for nt, tex in nodes:
+        nt.nodes.remove(tex)
+
+
+def bake_all(out_dir, base_res):
+    os.makedirs(out_dir, exist_ok=True)
+    scene = bpy.context.scene
+    scene.render.engine = "CYCLES"
+    scene.cycles.device = "CPU"
+    scene.cycles.samples = 4
+    scene.cycles.use_denoising = False
+    scene.render.bake.use_pass_direct = False
+    scene.render.bake.use_pass_indirect = False
+    scene.render.bake.use_pass_color = True
+    scene.render.bake.normal_space = "TANGENT"
+    scene.render.bake.margin = 8
+
+    # one representative object per mesh
+    rep_obj = {}
+    for ob in bpy.data.objects:
+        if ob.type == "MESH" and ob.data.name not in rep_obj and ob.data.name not in BAKE_SKIP:
+            rep_obj[ob.data.name] = ob
+    hidden = []
+    for ob in bpy.data.objects:   # baking ignores hidden objects, but keep roofs renderable
+        if ob.hide_render:
+            hidden.append(ob)
+            ob.hide_render = False
+
+    t0 = time.time()
+    n = 0
+    for mesh_name, ob in sorted(rep_obj.items()):
+        mesh = ob.data
+        if not mesh.polygons:
+            continue
+        res = _bake_res_for(mesh, base_res)
+        _unwrap(ob)
+        tag = mesh_name[2:] if mesh_name.startswith("M_") else mesh_name
+        col = _new_image("bk_%s_col" % tag, res, out_dir, color=True)
+        nrm = _new_image("bk_%s_nrm" % tag, res, out_dir, color=False)
+        rgh = _new_image("bk_%s_rgh" % tag, res, out_dir, color=False)
+        _bake_pass(ob, mesh, col, "DIFFUSE", pass_filter={"COLOR"})
+        _bake_pass(ob, mesh, nrm, "NORMAL", normal_space="TANGENT")
+        _bake_pass(ob, mesh, rgh, "ROUGHNESS")
+        for img in (col, nrm, rgh):
+            img.save()
+            img.pack()
+        metallic = 0.75 if mesh_name == "M_EncoreTower" else 0.0
+        mesh.materials.clear()
+        mesh.materials.append(_baked_material(tag, col, nrm, rgh, metallic))
+        for poly in mesh.polygons:
+            poly.material_index = 0
+        n += 1
+        print("[bake] %-24s %4dpx  (%.0fs)" % (mesh_name, res, time.time() - t0))
+    for ob in hidden:
+        ob.hide_render = True
+
+    # export-friendly water (glTF cannot carry the Light Path trick)
+    water = bpy.data.materials.new("Water_Export")
+    water.use_nodes = True
+    b = water.node_tree.nodes["Principled BSDF"]
+    b.inputs["Base Color"].default_value = (0.20, 0.72, 0.80, 1.0)
+    b.inputs["Roughness"].default_value = 0.05
+    b.inputs["Alpha"].default_value = 0.65
+    water.blend_method = "BLEND"
+    if "M_PoolWater" in bpy.data.meshes:
+        wm = bpy.data.meshes["M_PoolWater"]
+        wm.materials.clear()
+        wm.materials.append(water)
+    if "M_Ground" in bpy.data.meshes:
+        gm = bpy.data.meshes["M_Ground"]
+        g = bpy.data.materials.new("Ground_Export")
+        g.use_nodes = True
+        g.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (0.24, 0.24, 0.24, 1.0)
+        g.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = 0.9
+        gm.materials.clear()
+        gm.materials.append(g)
+    print("[bake] %d meshes baked in %.0fs" % (n, time.time() - t0))
+
+
+def _baked_material(tag, col, nrm, rgh, metallic):
+    m = bpy.data.materials.new("B_" + tag)
+    m.use_nodes = True
+    nt = m.node_tree
+    b = nt.nodes["Principled BSDF"]
+    b.inputs["Metallic"].default_value = metallic
+    b.inputs["Specular IOR Level"].default_value = 0.5
+    tc = nt.nodes.new("ShaderNodeTexImage")
+    tc.image = col
+    nt.links.new(tc.outputs["Color"], b.inputs["Base Color"])
+    tr = nt.nodes.new("ShaderNodeTexImage")
+    tr.image = rgh
+    nt.links.new(tr.outputs["Color"], b.inputs["Roughness"])
+    tn = nt.nodes.new("ShaderNodeTexImage")
+    tn.image = nrm
+    nm = nt.nodes.new("ShaderNodeNormalMap")
+    nm.space = "TANGENT"
+    nt.links.new(tn.outputs["Color"], nm.inputs["Color"])
+    nt.links.new(nm.outputs["Normal"], b.inputs["Normal"])
+    return m
+
+
 # --------------------------------------------------------------------------------------
 # Lighting, cameras, render, export
 # --------------------------------------------------------------------------------------
@@ -1252,11 +1411,11 @@ def triangle_count():
     return total
 
 
-def export_glb(path, draco=True):
+def export_glb(path, draco=True, images="WEBP"):
     kwargs = dict(
         filepath=path, export_format="GLB", export_apply=True, export_extras=True,
         export_yup=True, export_lights=False, export_cameras=False, export_animations=False,
-        export_skins=False, export_morph=False, export_image_format="WEBP",
+        export_skins=False, export_morph=False, export_image_format=images,
         export_image_quality=90, export_materials="EXPORT", export_normals=True,
         export_texcoords=True, export_draco_mesh_compression_enable=draco,
     )
@@ -1279,6 +1438,9 @@ def main():
     ap.add_argument("--out", default=os.path.dirname(os.path.abspath(__file__)))
     ap.add_argument("--no-render", action="store_true")
     ap.add_argument("--samples", type=int, default=48)
+    ap.add_argument("--bake", action="store_true",
+                    help="photo look: bake procedural materials to textures and export a GLB")
+    ap.add_argument("--bake-res", type=int, default=1024, help="base bake resolution (px)")
     ap.add_argument("--cameras", default="top,perspective,eyelevel",
                     help="comma-separated subset of: top, perspective, eyelevel")
     ap.add_argument("--look", choices=["stylized", "photo"], default="stylized",
@@ -1336,8 +1498,11 @@ def main():
     print("[size] %s: %.1f KB" % (os.path.basename(blend), os.path.getsize(blend) / 1024))
 
     if LOOK == "photo":
-        print("[export] photo look uses procedural node materials; GLB export is skipped "
-              "(use --look stylized for the web asset)")
+        if args.bake:
+            bake_all(os.path.join(out, "bake"), args.bake_res)
+            export_glb(os.path.join(out, "encore-beach-club-photo.glb"), draco=True, images="AUTO")
+        else:
+            print("[export] photo look: pass --bake to bake materials and export encore-beach-club-photo.glb")
     elif args.stage == "full":
         export_glb(os.path.join(out, "renders", "encore-beach-club-uncompressed.glb"), draco=False)
         export_glb(os.path.join(out, "encore-beach-club.glb"), draco=True)

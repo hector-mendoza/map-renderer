@@ -26,9 +26,10 @@
 <div id="app"></div>
 <div id="hud">
   <h1>Encore Beach Club</h1>
-  <p>Stylized prototype map. Drag to orbit, scroll to zoom, right-drag to pan. Click a table to highlight it.</p>
+  <p>Prototype map. Drag to orbit, scroll to zoom, right-drag to pan. Click a table to highlight it.</p>
   <div id="find"><input id="q" placeholder="Table number, e.g. 401" inputmode="numeric"><button id="go">Find</button></div>
   <label><input type="checkbox" id="roofs" checked> Show roofs</label>
+  <label>Look <select id="look"><option value="photo">Photo (baked textures)</option><option value="stylized">Stylized (96 KB)</option></select></label>
   <div id="pick">Nothing selected.</div>
 </div>
 <div id="status">Loading…</div>
@@ -41,6 +42,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { DRACOLoader } from './vendor/DRACOLoader.js';
 import { OrbitControls } from './vendor/OrbitControls.js';
+import { RoomEnvironment } from './vendor/RoomEnvironment.js';
 
 const app = document.getElementById('app');
 const status = document.getElementById('status');
@@ -56,6 +58,9 @@ app.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x9ec5e8);
 scene.fog = new THREE.Fog(0x9ec5e8, 250, 600);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.6;
 
 // glTF is Y-up. Blender's +Y (toward the pools) becomes -Z here.
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.5, 2000);
@@ -65,10 +70,18 @@ controls.target.set(0, 0, -15);
 controls.maxPolarAngle = Math.PI / 2 - 0.02;
 controls.enableDamping = true;
 
-scene.add(new THREE.HemisphereLight(0xdfeeff, 0x8a7a60, 1.2));
-const sun = new THREE.DirectionalLight(0xfff2dc, 2.4);
+scene.add(new THREE.HemisphereLight(0xdfeeff, 0x8a7a60, 0.8));
+const sun = new THREE.DirectionalLight(0xfff2dc, 2.2);
 sun.position.set(-60, 90, 40);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = sun.shadow.camera.bottom = -90;
+sun.shadow.camera.right = sun.shadow.camera.top = 90;
+sun.shadow.camera.far = 400;
+sun.shadow.bias = -0.0005;
 scene.add(sun);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const ground = new THREE.Mesh(new THREE.CircleGeometry(400, 48),
   new THREE.MeshLambertMaterial({ color: 0x7a8a7a }));
@@ -84,18 +97,39 @@ loader.setDRACOLoader(draco);
 const tables = new Map();      // "401" -> Object3D
 const roofs = [];
 let selected = null;
+let model = null;
 
-loader.load('./encore-beach-club.glb', (gltf) => {
-  scene.add(gltf.scene);
-  gltf.scene.traverse((o) => {
-    if (!o.isMesh) return;
-    if (o.name.startsWith('T_')) tables.set(o.name.slice(2), o);
-    if (/Roof/.test(o.name)) roofs.push(o);
+const LOOKS = { photo: './encore-beach-club-photo.glb', stylized: './encore-beach-club.glb' };
+function loadLook(look) {
+  if (model) { scene.remove(model); model = null; }
+  tables.clear(); roofs.length = 0; select(null);
+  status.textContent = 'Loading…';
+  loader.load(LOOKS[look], (gltf) => {
+    model = gltf.scene;
+    scene.add(model);
+    let hasGround = false;
+    model.traverse((o) => {
+      if (!o.isMesh) return;
+      o.castShadow = true; o.receiveShadow = true;
+      if (o.name.startsWith('T_')) tables.set(o.name.slice(2), o);
+      if (/Roof/.test(o.name)) { roofs.push(o); o.visible = document.getElementById('roofs').checked; }
+      if (o.name === 'Ground') hasGround = true;
+      if (o.name === 'Pool_Water') { o.castShadow = false; o.material.transparent = true; o.material.depthWrite = false; }
+    });
+    ground.visible = !hasGround;
+    status.textContent = `${tables.size} tables loaded (${look})`;
+  }, (ev) => {
+    if (ev.total) status.textContent = `Loading ${(ev.loaded / 1048576).toFixed(1)} / ${(ev.total / 1048576).toFixed(1)} MB`;
+  }, (err) => {
+    if (look === 'photo') { status.textContent = 'Photo GLB missing, falling back to stylized'; document.getElementById('look').value = 'stylized'; loadLook('stylized'); }
+    else { status.textContent = 'Failed to load GLB (serve over http, not file://)'; console.error(err); }
   });
-  status.textContent = `${tables.size} tables loaded`;
-}, (ev) => {
-  if (ev.total) status.textContent = `Loading ${(ev.loaded / 1024).toFixed(0)} / ${(ev.total / 1024).toFixed(0)} KB`;
-}, (err) => { status.textContent = 'Failed to load GLB (serve over http, not file://)'; console.error(err); });
+}
+const params = new URLSearchParams(location.search);
+const initialLook = LOOKS[params.get('look')] ? params.get('look') : 'photo';
+document.getElementById('look').value = initialLook;
+document.getElementById('look').onchange = (e) => loadLook(e.target.value);
+loadLook(initialLook);
 
 function describe(o) {
   const d = o.userData || {};
@@ -103,7 +137,7 @@ function describe(o) {
 }
 
 function select(o) {
-  if (selected) { selected.material = selected.userData._mat; selected = null; }
+  if (selected) { if (selected.userData._mat) selected.material = selected.userData._mat; selected = null; }
   if (!o) { pick.textContent = 'Nothing selected.'; return; }
   o.userData._mat = o.material;
   o.material = o.material.clone();
@@ -128,8 +162,9 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 function flyTo(o) {
   const box = new THREE.Box3().setFromObject(o);
   const c = box.getCenter(new THREE.Vector3());
+  const d = Math.max(10, box.getSize(new THREE.Vector3()).length() * 2.2);
   controls.target.copy(c);
-  camera.position.set(c.x - 14, c.y + 16, c.z + 18);
+  camera.position.set(c.x - d * 0.5, c.y + d * 0.65, c.z + d * 0.7);
 }
 document.getElementById('go').onclick = () => {
   const q = document.getElementById('q').value.trim().toUpperCase();
