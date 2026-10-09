@@ -252,6 +252,7 @@ def rect_px(cx, cy, w, h):
 COLLS = {}
 MATS = {}
 LOOK = "stylized"          # "stylized" (atlas, web GLB) or "photo" (procedural materials, Cycles only)
+WEB_TEX = False            # True when baking for the web: coarser, higher-contrast texture features
 PHOTO_MATS = []            # palette-ordered materials used in photo mode
 PROTOS = {}
 STATS = {"objects": 0}
@@ -899,15 +900,19 @@ def _mapped(nt, coord, mapping_scale):
 
 def pm_stucco(name, color):
     m, nt, b, co = _pm_base(name, color, rough=0.78)
-    var = _mix(nt, _noise(nt, co, 0.6, 3), color, tuple(c * 0.9 for c in color))
+    dark = 0.82 if WEB_TEX else 0.9
+    var = _mix(nt, _noise(nt, co, 0.6, 3), color, tuple(c * dark for c in color))
     nt.links.new(var, b.inputs["Base Color"])
-    _bump(nt, b, _noise(nt, co, 45.0, 6, 0.6), 0.18, 0.01)
+    _bump(nt, b, _noise(nt, co, 12.0 if WEB_TEX else 45.0, 6, 0.6), 0.3 if WEB_TEX else 0.18, 0.01)
     return m
 
 
 def pm_stone_tiles(name, c1, c2, cm, width, height, rough=0.45):
     m, nt, b, co = _pm_base(name, c1, rough=rough, spec=0.4)
-    br = _brick(nt, co, 1.0, width, height, 0.01, c1, c2, cm)
+    if WEB_TEX:   # bigger tiles, wider and darker grout so the grid reads at map distance
+        width, height = width * 1.5, height * 1.5
+        cm = tuple(c * 0.75 for c in cm)
+    br = _brick(nt, co, 1.0, width, height, 0.03 if WEB_TEX else 0.01, c1, c2, cm)
     veins = _noise(nt, co, 1.2, 8, 0.7)
     col = _mix(nt, veins, c1, c2)
     tile = nt.nodes.new("ShaderNodeMix")
@@ -930,9 +935,25 @@ def pm_stone_tiles(name, c1, c2, cm, width, height, rough=0.45):
 
 def pm_fabric(name, color, sheen=0.35, rough=0.92):
     m, nt, b, co = _pm_base(name, color, rough=rough, spec=0.3, sheen=sheen)
-    var = _mix(nt, _noise(nt, co, 3.0, 2), color, tuple(min(1, c * 1.08) for c in color))
+    lift = 1.18 if WEB_TEX else 1.08
+    var = _mix(nt, _noise(nt, co, 3.0, 2), color, tuple(min(1, c * lift) for c in color))
+    if WEB_TEX:   # visible quilting seams on the cushions
+        w = nt.nodes.new("ShaderNodeTexWave")
+        w.wave_type = "BANDS"
+        w.bands_direction = "DIAGONAL"
+        w.inputs["Scale"].default_value = 3.0
+        w.inputs["Distortion"].default_value = 0.2
+        nt.links.new(co.outputs["Object"], w.inputs["Vector"])
+        quilt = _mix(nt, w.outputs["Fac"], (0.92, 0.92, 0.92), (1.0, 1.0, 1.0))
+        mult = nt.nodes.new("ShaderNodeMix")
+        mult.data_type = "RGBA"
+        mult.blend_type = "MULTIPLY"
+        mult.inputs["Factor"].default_value = 1.0
+        nt.links.new(var, mult.inputs["A"])
+        nt.links.new(quilt, mult.inputs["B"])
+        var = mult.outputs["Result"]
     nt.links.new(var, b.inputs["Base Color"])
-    _bump(nt, b, _noise(nt, co, 300.0, 2, 0.5), 0.12, 0.003)
+    _bump(nt, b, _noise(nt, co, 120.0 if WEB_TEX else 300.0, 2, 0.5), 0.2 if WEB_TEX else 0.12, 0.003)
     return m
 
 
@@ -941,12 +962,12 @@ def pm_wicker(name, color):
     w1 = nt.nodes.new("ShaderNodeTexWave")
     w1.wave_type = "BANDS"
     w1.bands_direction = "X"
-    w1.inputs["Scale"].default_value = 70.0
+    w1.inputs["Scale"].default_value = 28.0 if WEB_TEX else 70.0
     w1.inputs["Distortion"].default_value = 0.6
     w2 = nt.nodes.new("ShaderNodeTexWave")
     w2.wave_type = "BANDS"
     w2.bands_direction = "Y"
-    w2.inputs["Scale"].default_value = 70.0
+    w2.inputs["Scale"].default_value = 28.0 if WEB_TEX else 70.0
     w2.inputs["Distortion"].default_value = 0.6
     nt.links.new(co.outputs["Object"], w1.inputs["Vector"])
     nt.links.new(co.outputs["Object"], w2.inputs["Vector"])
@@ -954,8 +975,17 @@ def pm_wicker(name, color):
     mul.operation = "MULTIPLY"
     nt.links.new(w1.outputs["Fac"], mul.inputs[0])
     nt.links.new(w2.outputs["Fac"], mul.inputs[1])
-    _bump(nt, b, mul.outputs["Value"], 0.45, 0.01)
-    var = _mix(nt, _noise(nt, co, 8.0, 3), color, tuple(c * 0.88 for c in color))
+    _bump(nt, b, mul.outputs["Value"], 0.7 if WEB_TEX else 0.45, 0.01)
+    var = _mix(nt, _noise(nt, co, 8.0, 3), color, tuple(c * (0.8 if WEB_TEX else 0.88) for c in color))
+    if WEB_TEX:   # weave shading in the colour too, so it survives without the normal map
+        shade = _mix(nt, mul.outputs["Value"], (0.78, 0.78, 0.78), (1.0, 1.0, 1.0))
+        mult = nt.nodes.new("ShaderNodeMix")
+        mult.data_type = "RGBA"
+        mult.blend_type = "MULTIPLY"
+        mult.inputs["Factor"].default_value = 1.0
+        nt.links.new(var, mult.inputs["A"])
+        nt.links.new(shade, mult.inputs["B"])
+        var = mult.outputs["Result"]
     nt.links.new(var, b.inputs["Base Color"])
     return m
 
@@ -1216,7 +1246,42 @@ def _bake_pass(ob, mesh, img, bake_type, **kw):
         nt.nodes.remove(tex)
 
 
-def bake_all(out_dir, base_res):
+def _light_reference(out_dir):
+    """Bake a tiny lighting map of a sunlit horizontal plane above the scene; returns its mean."""
+    bm = bmesh.new()
+    bm_box(bm, (0, 0, 80.0), (4.0, 4.0, 0.05), "white")
+    mesh = finish_mesh("M_LightRef", bm)
+    ob = add_obj("LightRef", mesh, "Pools")
+    _unwrap(ob)
+    img = _new_image("bk_lightref", 16, out_dir, color=False)
+    _bake_pass(ob, mesh, img, "DIFFUSE", pass_filter={"DIRECT", "INDIRECT"})
+    px = list(img.pixels)
+    vals = [px[i] for i in range(0, len(px), 4)]
+    vals.sort()
+    ref = vals[len(vals) // 2]
+    bpy.data.images.remove(img)
+    bpy.data.objects.remove(ob)
+    bpy.data.meshes.remove(mesh)
+    STATS["objects"] -= 1
+    return max(ref, 1e-3)
+
+
+def _composite_lighting(col_path, light_path, out_path):
+    """colour (sRGB) x lighting (linear, 0..1 after normalisation) -> lit colour (sRGB)."""
+    from PIL import Image
+    import numpy as np
+    col = np.asarray(Image.open(col_path).convert("RGB"), dtype=np.float32) / 255.0
+    lit = Image.open(light_path).convert("RGB").resize(Image.open(col_path).size, Image.BILINEAR)
+    lit = np.asarray(lit, dtype=np.float32) / 255.0
+    lin = np.where(col <= 0.04045, col / 12.92, ((col + 0.055) / 1.055) ** 2.4)
+    # soften: keep 20% ambient floor so shadows do not go black, and allow a little over-bright
+    light = 0.2 + 0.95 * np.clip(lit, 0.0, 1.2)
+    out = np.clip(lin * light, 0.0, 1.0)
+    srgb = np.where(out <= 0.0031308, out * 12.92, 1.055 * out ** (1 / 2.4) - 0.055)
+    Image.fromarray((srgb * 255 + 0.5).astype(np.uint8)).save(out_path)
+
+
+def bake_all(out_dir, base_res, bake_light=True):
     os.makedirs(out_dir, exist_ok=True)
     scene = bpy.context.scene
     scene.render.engine = "CYCLES"
@@ -1242,6 +1307,18 @@ def bake_all(out_dir, base_res):
 
     t0 = time.time()
     n = 0
+    sun = bpy.data.objects.get("Sun")
+    world_bg = scene.world.node_tree.nodes["Background"] if scene.world and scene.world.use_nodes else None
+    if bake_light:
+        # Normalise the lighting bake so an unshadowed horizontal surface lands near 0.9
+        scene.cycles.samples = 16
+        ref = _light_reference(out_dir)
+        k = 0.9 / ref
+        if sun:
+            sun.data.energy *= k
+        if world_bg:
+            world_bg.inputs["Strength"].default_value *= k
+        print("[bake] lighting reference %.3f -> scale %.3f" % (ref, k))
     for mesh_name, ob in sorted(rep_obj.items()):
         mesh = ob.data
         if not mesh.polygons:
@@ -1252,11 +1329,24 @@ def bake_all(out_dir, base_res):
         col = _new_image("bk_%s_col" % tag, res, out_dir, color=True)
         nrm = _new_image("bk_%s_nrm" % tag, res, out_dir, color=False)
         rgh = _new_image("bk_%s_rgh" % tag, res, out_dir, color=False)
+        scene.cycles.samples = 1
         _bake_pass(ob, mesh, col, "DIFFUSE", pass_filter={"COLOR"})
         _bake_pass(ob, mesh, nrm, "NORMAL", normal_space="TANGENT")
         _bake_pass(ob, mesh, rgh, "ROUGHNESS")
         for img in (col, nrm, rgh):
             img.save()
+        if bake_light:
+            res_l = max(64, min(1024, res // 4))
+            lit = _new_image("bk_%s_lit" % tag, res_l, out_dir, color=False)
+            scene.cycles.samples = 16
+            _bake_pass(ob, mesh, lit, "DIFFUSE", pass_filter={"DIRECT", "INDIRECT"})
+            lit.save()
+            lit_col_path = os.path.join(out_dir, "bk_%s_litcol.png" % tag)
+            _composite_lighting(col.filepath_raw, lit.filepath_raw, lit_col_path)
+            bpy.data.images.remove(col)
+            col = bpy.data.images.load(lit_col_path)
+            col.colorspace_settings.name = "sRGB"
+        for img in (col, nrm, rgh):
             img.pack()
         metallic = 0.75 if mesh_name == "M_EncoreTower" else 0.0
         mesh.materials.clear()
@@ -1267,8 +1357,21 @@ def bake_all(out_dir, base_res):
         print("[bake] %-24s %4dpx  (%.0fs)" % (mesh_name, res, time.time() - t0))
     for ob in hidden:
         ob.hide_render = True
+    if bake_light:   # restore the lights for anything rendered afterwards
+        if sun:
+            sun.data.energy /= k
+        if world_bg:
+            world_bg.inputs["Strength"].default_value /= k
 
-    # export-friendly water (glTF cannot carry the Light Path trick)
+    # export-friendly water (glTF cannot carry the Light Path trick); planar UVs so the viewer
+    # can tile an animated normal map over it (1 repeat = 6 m)
+    if "M_PoolWater" in bpy.data.meshes:
+        wm = bpy.data.meshes["M_PoolWater"]
+        uv = wm.uv_layers.active or wm.uv_layers.new(name="UVMap")
+        for poly in wm.polygons:
+            for li in poly.loop_indices:
+                v = wm.vertices[wm.loops[li].vertex_index].co
+                uv.data[li].uv = (v.x / 6.0, v.y / 6.0)
     water = bpy.data.materials.new("Water_Export")
     water.use_nodes = True
     b = water.node_tree.nodes["Principled BSDF"]
@@ -1289,6 +1392,24 @@ def bake_all(out_dir, base_res):
         gm.materials.clear()
         gm.materials.append(g)
     print("[bake] %d meshes baked in %.0fs" % (n, time.time() - t0))
+
+
+def write_water_normal_map(path, size=512):
+    """Tileable ripple normal map (sum of sines) for the viewer's animated pool surface."""
+    import numpy as np
+    from PIL import Image
+    y, x = np.mgrid[0:size, 0:size].astype(np.float32) / size
+    h = np.zeros((size, size), np.float32)
+    waves = [(3, 1, 0.35, 0.0), (1, 4, 0.25, 1.3), (5, 3, 0.18, 2.1), (2, -6, 0.15, 0.4),
+             (7, -2, 0.08, 2.9), (-4, 5, 0.1, 1.7)]
+    for fx, fy, amp, ph in waves:
+        h += amp * np.sin(2 * np.pi * (fx * x + fy * y) + ph)
+    dx = np.roll(h, -1, axis=1) - np.roll(h, 1, axis=1)
+    dy = np.roll(h, -1, axis=0) - np.roll(h, 1, axis=0)
+    strength = 6.0
+    nrm = np.stack([-dx * strength, -dy * strength, np.ones_like(h)], axis=-1)
+    nrm /= np.linalg.norm(nrm, axis=-1, keepdims=True)
+    Image.fromarray(((nrm * 0.5 + 0.5) * 255).astype(np.uint8)).save(path)
 
 
 def _baked_material(tag, col, nrm, rgh, metallic):
@@ -1411,10 +1532,10 @@ def triangle_count():
     return total
 
 
-def export_glb(path, draco=True, images="WEBP"):
+def export_glb(path, draco=True, images="WEBP", lights=False):
     kwargs = dict(
         filepath=path, export_format="GLB", export_apply=True, export_extras=True,
-        export_yup=True, export_lights=False, export_cameras=False, export_animations=False,
+        export_yup=True, export_lights=lights, export_cameras=False, export_animations=False,
         export_skins=False, export_morph=False, export_image_format=images,
         export_image_quality=90, export_materials="EXPORT", export_normals=True,
         export_texcoords=True, export_draco_mesh_compression_enable=draco,
@@ -1441,13 +1562,15 @@ def main():
     ap.add_argument("--bake", action="store_true",
                     help="photo look: bake procedural materials to textures and export a GLB")
     ap.add_argument("--bake-res", type=int, default=1024, help="base bake resolution (px)")
+    ap.add_argument("--no-bake-light", action="store_true", help="bake colour only (no sun/sky/AO)")
     ap.add_argument("--cameras", default="top,perspective,eyelevel",
                     help="comma-separated subset of: top, perspective, eyelevel")
     ap.add_argument("--look", choices=["stylized", "photo"], default="stylized",
                     help="photo: procedural materials, backdrop and Cycles-only outputs")
     args = ap.parse_args(argv)
-    global LOOK
+    global LOOK, WEB_TEX
     LOOK = args.look
+    WEB_TEX = bool(args.bake)
     out = args.out
     os.makedirs(os.path.join(out, "renders"), exist_ok=True)
 
@@ -1499,8 +1622,9 @@ def main():
 
     if LOOK == "photo":
         if args.bake:
-            bake_all(os.path.join(out, "bake"), args.bake_res)
-            export_glb(os.path.join(out, "encore-beach-club-photo.glb"), draco=True, images="AUTO")
+            bake_all(os.path.join(out, "bake"), args.bake_res, bake_light=not args.no_bake_light)
+            write_water_normal_map(os.path.join(out, "water_normal.png"))
+            export_glb(os.path.join(out, "encore-beach-club-photo.glb"), draco=True, images="AUTO", lights=True)
         else:
             print("[export] photo look: pass --bake to bake materials and export encore-beach-club-photo.glb")
     elif args.stage == "full":

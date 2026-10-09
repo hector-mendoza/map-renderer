@@ -70,7 +70,8 @@ controls.target.set(0, 0, -15);
 controls.maxPolarAngle = Math.PI / 2 - 0.02;
 controls.enableDamping = true;
 
-scene.add(new THREE.HemisphereLight(0xdfeeff, 0x8a7a60, 0.8));
+const hemi = new THREE.HemisphereLight(0xdfeeff, 0x8a7a60, 0.8);
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xfff2dc, 2.2);
 sun.position.set(-60, 90, 40);
 sun.castShadow = true;
@@ -98,6 +99,25 @@ const tables = new Map();      // "401" -> Object3D
 const roofs = [];
 let selected = null;
 let model = null;
+let water = null;
+const waterNormal = new THREE.TextureLoader().load('./water_normal.png');
+waterNormal.wrapS = waterNormal.wrapT = THREE.RepeatWrapping;
+
+function applyLookLighting(look, gltfSun) {
+  if (look === 'photo') {
+    // Shadows and ambient occlusion are baked into the photo textures: use the GLB's own sun
+    // (direction from Blender) at low intensity for speculars only, no second set of shadows.
+    sun.visible = false;
+    hemi.intensity = 1.6;
+    scene.environmentIntensity = 0.5;
+    if (gltfSun) { gltfSun.intensity = 1.0; gltfSun.castShadow = false; }
+  } else {
+    sun.visible = true;
+    hemi.intensity = 0.8;
+    scene.environmentIntensity = 0.6;
+    if (gltfSun) gltfSun.visible = false;
+  }
+}
 
 const LOOKS = { photo: './encore-beach-club-photo.glb', stylized: './encore-beach-club.glb' };
 function loadLook(look) {
@@ -108,14 +128,31 @@ function loadLook(look) {
     model = gltf.scene;
     scene.add(model);
     let hasGround = false;
+    let gltfSun = null;
+    water = null;
     model.traverse((o) => {
+      if (o.isDirectionalLight) { gltfSun = o; return; }   // GLTFLoader already orients its target
       if (!o.isMesh) return;
       o.castShadow = true; o.receiveShadow = true;
       if (o.name.startsWith('T_')) tables.set(o.name.slice(2), o);
       if (/Roof/.test(o.name)) { roofs.push(o); o.visible = document.getElementById('roofs').checked; }
       if (o.name === 'Ground') hasGround = true;
-      if (o.name === 'Pool_Water') { o.castShadow = false; o.material.transparent = true; o.material.depthWrite = false; }
+      if (o.name === 'Pool_Water') {
+        o.castShadow = false;
+        if (look === 'photo') {
+          // animated ripples: tiling normal map scrolled every frame (UVs were set to 1 repeat = 6 m)
+          o.material = new THREE.MeshPhysicalMaterial({
+            color: 0x62c9d4, transparent: true, opacity: 0.72, roughness: 0.08, metalness: 0,
+            normalMap: waterNormal, normalScale: new THREE.Vector2(0.45, 0.45),
+            envMapIntensity: 1.2, depthWrite: false,
+          });
+          water = o;
+        } else {
+          o.material.transparent = true; o.material.depthWrite = false;
+        }
+      }
     });
+    applyLookLighting(look, gltfSun);
     ground.visible = !hasGround;
     status.textContent = `${tables.size} tables loaded (${look})`;
   }, (ev) => {
@@ -180,7 +217,13 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
-renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const t = clock.getElapsedTime();
+  if (water) { waterNormal.offset.set(t * 0.012, t * 0.008); }
+  controls.update();
+  renderer.render(scene, camera);
+});
 </script>
 </body>
 </html>
