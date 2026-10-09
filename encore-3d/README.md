@@ -4,15 +4,26 @@ A low-poly, web-ready recreation of Encore Beach Club (Wynn Las Vegas), built en
 Python script in Blender and exported as a Draco-compressed GLB. Prototype only: the goal is a
 recognizable layout with every bookable table in the right place, not photorealism.
 
-![Top-down render](renders/stage2_full_top.png)
-![Perspective render](renders/stage2_full_perspective.png)
+Two looks are built from the same layout data:
+
+- **Stylized** (`--look stylized`, default): one palette atlas, tiny Draco GLB for the web viewer.
+- **Photo** (`--look photo`): procedural Cycles materials (travertine tiles, stucco, marble, wicker,
+  fabric, bark, refractive water), sun and sky lighting, bevelled furniture, balustrades, column
+  capitals, awning scallops, and a backdrop (bronze-glass Encore tower, casino low-rise, ground).
+  No textures are downloaded; everything is generated in Blender node trees.
+
+![Photo look, perspective](renders/photo_perspective.png)
+![Photo look, eye level from the stage](renders/photo_eyelevel.png)
+![Photo look, top-down](renders/photo_top.png)
+![Stylized top-down render](renders/stage2_full_top.png)
 
 ## Files
 
 | File | Purpose |
 | --- | --- |
 | `build_encore.py` | Builds the whole scene from scratch (bpy), saves the .blend, exports GLBs, renders previews |
-| `encore-beach-club.blend` | Saved Blender scene (Blender 5.0) |
+| `encore-beach-club.blend` | Saved Blender scene, stylized look |
+| `encore-beach-club-photo.blend` | Saved Blender scene, photo look (open and render with Cycles) |
 | `encore-beach-club.glb` | Web asset: Draco mesh compression, WebP palette texture, custom properties as extras |
 | `index.html` + `vendor/` | Minimal Three.js viewer: orbit, click-to-highlight a table, find-by-number, roof toggle |
 | `renders/` | Stage 1 blockout and stage 2 full renders, side-by-side comparisons with the plan, viewer screenshot, uncompressed GLB for size comparison |
@@ -27,6 +38,7 @@ recognizable layout with every bookable table in the right place, not photoreali
 | 2 full | `renders/encore-beach-club-uncompressed.glb` (no Draco) | 265 KB |
 | 2 full | **`encore-beach-club.glb` (Draco + WebP), the deliverable** | **96 KB** |
 | 2 full | `encore-beach-club.blend` | 154 KB |
+| photo | `encore-beach-club-photo.blend` (procedural materials, no GLB) | ~330 KB |
 
 Budget was 10 MB (stretch 5 MB, mobile first-load 8 MB). The final GLB is about 1% of the budget.
 The viewer page itself is dominated by the vendored Three.js build (about 2.2 MB, cacheable), not
@@ -51,20 +63,36 @@ Scene statistics (stage 2): 247 objects, 185 table objects, 47 unique meshes, 14
 
 ## Running
 
-Rebuild everything (about 2 minutes on 4 CPU cores, most of it the two Cycles renders):
+Rebuild everything (about 2 minutes on 4 CPU cores for the stylized look, most of it the two
+Cycles renders; the photo look at 64 samples takes about 45 minutes for its three renders):
 
 ```
-blender -b --python build_encore.py -- --stage full
+blender -b --python build_encore.py -- --stage full                 # stylized + GLB
+blender -b --python build_encore.py -- --stage full --look photo --samples 64
+blender -b --python build_encore.py -- --look photo --cameras eyelevel --samples 16   # quick check
 # or, with the pip wheel (python 3.11):  pip install bpy
 python build_encore.py -- --stage full [--samples 48] [--no-render] [--out DIR]
 python build_encore.py -- --stage blockout     # stage 1 zone boxes only
 ```
+
+The script runs on Blender 4.0 (Ubuntu apt package) and on the Blender 5.0 `bpy` wheel. Ubuntu's
+Blender is built without OpenImageDenoise, so on that build the script disables denoising and
+doubles the sample count instead.
 
 Viewer (must be served over HTTP because the page fetches the GLB and Draco decoder):
 
 ```
 python -m http.server 8000     # then open http://localhost:8000/index.html
 ```
+
+## Photo look notes
+
+- The GLB is only exported for the stylized look: procedural node materials do not survive
+  glTF export. Baking them to image textures is the next step if a textured web asset is wanted.
+- Water uses a refractive Principled surface that is transparent to shadow rays (Light Path
+  node), so sunlight reaches the turquoise plaster basin without refractive caustics.
+- The Encore tower, casino block and surrounding ground are rough placeholders for context only;
+  their size and position are not measured.
 
 ## Known inaccuracies
 

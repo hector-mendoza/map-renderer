@@ -142,7 +142,8 @@ def make_materials(out_dir):
     wb.inputs["Roughness"].default_value = 0.05
     wb.inputs["Alpha"].default_value = 0.72
     water.blend_method = "BLEND"
-    water.surface_render_method = "BLENDED"
+    if hasattr(water, "surface_render_method"):
+        water.surface_render_method = "BLENDED"
     return atlas, water
 
 
@@ -153,6 +154,7 @@ def _stamp(bm, faces, color):
     uv_layer = bm.loops.layers.uv.verify()
     u, v = palette_uv(CI[color])
     for f in faces:
+        f.material_index = CI[color]
         for loop in f.loops:
             loop[uv_layer].uv = (u, v)
 
@@ -183,7 +185,8 @@ def bm_cyl(bm, center, radius, height, color, segments=12, radius2=None, color_a
     faces = _faces_of(verts)
     _stamp(bm, faces, color)
     if color_alt:  # alternate side faces (umbrella stripes)
-        side = sorted((f for f in faces if len(f.verts) <= 4 and abs(f.normal.z) < 0.9),
+        bm.normal_update()
+        side = sorted((f for f in faces if len(f.verts) <= 4 and abs(f.normal.z) < 0.7),
                       key=lambda f: math.atan2(f.calc_center_median().y - center[1],
                                                f.calc_center_median().x - center[0]))
         _stamp(bm, side[1::2], color_alt)
@@ -248,6 +251,8 @@ def rect_px(cx, cy, w, h):
 # --------------------------------------------------------------------------------------
 COLLS = {}
 MATS = {}
+LOOK = "stylized"          # "stylized" (atlas, web GLB) or "photo" (procedural materials, Cycles only)
+PHOTO_MATS = []            # palette-ordered materials used in photo mode
 PROTOS = {}
 STATS = {"objects": 0}
 
@@ -264,7 +269,14 @@ def finish_mesh(name, bm, material="Atlas"):
     mesh = bpy.data.meshes.new(name)
     bm.to_mesh(mesh)
     bm.free()
-    mesh.materials.append(MATS[material])
+    if LOOK == "photo" and material == "Atlas":
+        for m in PHOTO_MATS:
+            mesh.materials.append(m)
+    else:
+        mesh.materials.append(MATS[material])
+        if LOOK != "photo":
+            for poly in mesh.polygons:
+                poly.material_index = 0
     return mesh
 
 
@@ -276,6 +288,11 @@ def add_obj(name, mesh, collection, loc=(0, 0, 0), rot_z=0.0, props=None):
     if props:
         for k, v in props.items():
             ob[k] = v
+    if LOOK == "photo" and (name.startswith("T_") or name.startswith("Umbrella")):
+        bev = ob.modifiers.new("bevel", "BEVEL")
+        bev.width = 0.03
+        bev.segments = 2
+        bev.limit_method = "ANGLE"
     STATS["objects"] += 1
     return ob
 
@@ -389,21 +406,32 @@ def f_gaming_table(bm):
 
 def f_palm(bm):
     h = 11.0
-    bm_cyl(bm, (0, 0, h / 2), 0.38, h, "trunk", 6, radius2=0.22)
+    photo = LOOK == "photo"
+    bm_cyl(bm, (0, 0, h / 2), 0.38, h, "trunk", 12 if photo else 6, radius2=0.22)
     uv = bm.loops.layers.uv.verify()
     u, v = palette_uv(CI["green"])
-    for i in range(7):
-        a = math.radians(i * 360.0 / 7)
+    n_fronds = 13 if photo else 7
+    for i in range(n_fronds):
+        a = math.radians(i * 360.0 / n_fronds + (i % 2) * 11)
+        droop = 0.0 if not photo else (-0.9 if i % 3 == 0 else 0.3)
         d = Vector((math.cos(a), math.sin(a), 0))
         s = Vector((-math.sin(a), math.cos(a), 0))
-        p0 = Vector((0, 0, h))
-        p1 = p0 + d * 1.7 + Vector((0, 0, 0.5))
-        p2 = p0 + d * 3.3 + Vector((0, 0, -1.3))
-        w0, w1, w2 = 0.3, 0.7, 0.15
-        v0a, v0b = bm.verts.new(p0 + s * w0), bm.verts.new(p0 - s * w0)
-        v1a, v1b = bm.verts.new(p1 + s * w1), bm.verts.new(p1 - s * w1)
-        v2a, v2b = bm.verts.new(p2 + s * w2), bm.verts.new(p2 - s * w2)
-        for f in (bm.faces.new((v0b, v0a, v1a, v1b)), bm.faces.new((v1b, v1a, v2a, v2b))):
+        # polyline of the frond spine: 3 segments in photo mode
+        pts = [Vector((0, 0, h))]
+        if photo:
+            pts += [pts[0] + d * 1.3 + Vector((0, 0, 0.6 + droop * 0.2)),
+                    pts[0] + d * 2.6 + Vector((0, 0, 0.3 + droop * 0.8)),
+                    pts[0] + d * 3.8 + Vector((0, 0, -1.2 + droop * 1.4))]
+            widths = [0.25, 0.75, 0.6, 0.12]
+        else:
+            pts += [pts[0] + d * 1.7 + Vector((0, 0, 0.5)), pts[0] + d * 3.3 + Vector((0, 0, -1.3))]
+            widths = [0.3, 0.7, 0.15]
+        ring = []
+        for pt, w in zip(pts, widths):
+            ring.append((bm.verts.new(pt + s * w), bm.verts.new(pt - s * w)))
+        for (a0, b0), (a1, b1) in zip(ring, ring[1:]):
+            f = bm.faces.new((b0, a0, a1, b1))
+            f.material_index = CI["green"]
             for loop in f.loops:
                 loop[uv].uv = (u, v)
     bm_cyl(bm, (0, 0, h), 0.7, 1.0, "green", 6)
@@ -556,17 +584,11 @@ UMBRELLAS = [(300, 460), (500, 455), (260, 300), (540, 300), (180, 300), (620, 3
 # --------------------------------------------------------------------------------------
 # Builders
 # --------------------------------------------------------------------------------------
-def build_ground():
+def cut_hole(ob, poly, z0, z1):
+    """Boolean-subtract an extruded polygon from a mesh object (modifier applied immediately)."""
     bm = bmesh.new()
-    deck = [P(x, y) for x, y in DECK_PX]
-    bm_prism(bm, deck, -0.3, 0.0, "deck")
-    mesh = finish_mesh("M_Deck", bm)
-    ob = add_obj("Deck", mesh, "Walkways")
-
-    # cut the pool hole out of the deck with a boolean against the basin volume
-    bm = bmesh.new()
-    bm_prism(bm, [P(x, y) for x, y in POOL_PX], -2.0, 1.0, "water")
-    cutter = add_obj("PoolCutter", finish_mesh("M_PoolCutter", bm), "Pools")
+    bm_prism(bm, poly, z0, z1, "water")
+    cutter = add_obj("Cutter", finish_mesh("M_Cutter", bm), "Pools")
     mod = ob.modifiers.new("cut", "BOOLEAN")
     mod.operation = "DIFFERENCE"
     mod.object = cutter
@@ -574,15 +596,28 @@ def build_ground():
     dg = bpy.context.evaluated_depsgraph_get()
     ev = ob.evaluated_get(dg)
     new_mesh = bpy.data.meshes.new_from_object(ev)
-    new_mesh.materials.append(MATS["Atlas"])
+    mats = list(ob.data.materials)
+    new_mesh.materials.clear()
+    for m in mats:
+        new_mesh.materials.append(m)
     ob.modifiers.clear()
     old = ob.data
     ob.data = new_mesh
     bpy.data.meshes.remove(old)
+    cm = cutter.data
     bpy.data.objects.remove(cutter)
-    for p in ("M_PoolCutter",):
-        if p in bpy.data.meshes:
-            bpy.data.meshes.remove(bpy.data.meshes[p])
+    bpy.data.meshes.remove(cm)
+    STATS["objects"] -= 1
+
+
+def build_ground():
+    bm = bmesh.new()
+    deck = [P(x, y) for x, y in DECK_PX]
+    bm_prism(bm, deck, -0.3, 0.0, "deck")
+    mesh = finish_mesh("M_Deck", bm)
+    ob = add_obj("Deck", mesh, "Walkways")
+
+    cut_hole(ob, [P(x, y) for x, y in POOL_PX], -3.0, 1.0)
 
     # Backstage ground slab (the corridor sits on its own footprint)
     bm = bmesh.new()
@@ -614,7 +649,7 @@ def build_ground():
 def build_pool():
     bm = bmesh.new()
     poly = [P(x, y) for x, y in POOL_PX]
-    bm_prism(bm, poly, -1.6, 0.0, "marble", top=False)        # basin walls + floor
+    bm_prism(bm, poly, -1.6, 0.0, "water" if LOOK == "photo" else "marble", top=False)   # basin walls + floor
     add_obj("Pool_Basin", finish_mesh("M_PoolBasin", bm), "Pools")
 
     bm = bmesh.new()
@@ -643,8 +678,11 @@ def build_gaming_pavilion():
     bm_prism(bm, rect_px(400, 180, 210, 8), 0.0, 7.0, "ivory")            # back wall
     for px in (300, 335, 370, 430, 465, 500):                             # columns
         x, y = P(px, 266)
-        bm_cyl(bm, (x, y, 3.5), 0.45, 7.0, "white", 8)
-        x, y = P(px, 180 + 3)
+        segs = 24 if LOOK == "photo" else 8
+        bm_cyl(bm, (x, y, 3.5), 0.45, 7.0, "white", segs)
+        if LOOK == "photo":
+            bm_box(bm, (x, y, 0.2), (1.3, 1.3, 0.4), "white")                 # base
+            bm_box(bm, (x, y, 6.75), (1.3, 1.3, 0.5), "white")                # capital
     bm_prism(bm, rect_px(400, 222, 210, 90), -0.05, 0.02, "marble")       # floor
     add_obj("Gaming_Pavilion", finish_mesh("M_GamingPavilion", bm), "Gaming")
 
@@ -789,6 +827,333 @@ def build_blockout():
         add_obj(name, finish_mesh("M_" + name, bm), "Blockout")
 
 
+
+# --------------------------------------------------------------------------------------
+# Photo look: procedural node materials (no downloaded textures), extra detail, backdrop
+# --------------------------------------------------------------------------------------
+def _pm_base(name, color, rough=0.6, metal=0.0, spec=0.5, sheen=0.0, coat=0.0):
+    m = bpy.data.materials.new("P_" + name)
+    m.use_nodes = True
+    nt = m.node_tree
+    b = nt.nodes["Principled BSDF"]
+    b.inputs["Base Color"].default_value = (*color, 1.0)
+    b.inputs["Roughness"].default_value = rough
+    b.inputs["Metallic"].default_value = metal
+    b.inputs["Specular IOR Level"].default_value = spec
+    b.inputs["Sheen Weight"].default_value = sheen
+    b.inputs["Coat Weight"].default_value = coat
+    coord = nt.nodes.new("ShaderNodeTexCoord")
+    m["_coord"] = coord.name
+    return m, nt, b, coord
+
+
+def _noise(nt, coord, scale, detail=4.0, rough=0.5, out="Fac"):
+    n = nt.nodes.new("ShaderNodeTexNoise")
+    n.inputs["Scale"].default_value = scale
+    n.inputs["Detail"].default_value = detail
+    n.inputs["Roughness"].default_value = rough
+    nt.links.new(coord.outputs["Object"], n.inputs["Vector"])
+    return n.outputs[out]
+
+
+def _bump(nt, b, height_socket, strength, distance=0.02):
+    bump = nt.nodes.new("ShaderNodeBump")
+    bump.inputs["Strength"].default_value = strength
+    bump.inputs["Distance"].default_value = distance
+    nt.links.new(height_socket, bump.inputs["Height"])
+    nt.links.new(bump.outputs["Normal"], b.inputs["Normal"])
+    return bump
+
+
+def _mix(nt, fac_socket, c1, c2):
+    mix = nt.nodes.new("ShaderNodeMix")
+    mix.data_type = "RGBA"
+    mix.inputs["A"].default_value = (*c1, 1.0)
+    mix.inputs["B"].default_value = (*c2, 1.0)
+    nt.links.new(fac_socket, mix.inputs["Factor"])
+    return mix.outputs["Result"]
+
+
+def _brick(nt, coord, scale, width, height, mortar=0.012, c1=(1, 1, 1), c2=(0.9, 0.9, 0.9), cm=(0.5, 0.5, 0.5)):
+    br = nt.nodes.new("ShaderNodeTexBrick")
+    br.inputs["Scale"].default_value = scale
+    br.inputs["Mortar Size"].default_value = mortar
+    br.inputs["Mortar Smooth"].default_value = 0.3
+    br.inputs["Brick Width"].default_value = width
+    br.inputs["Row Height"].default_value = height
+    br.inputs["Color1"].default_value = (*c1, 1.0)
+    br.inputs["Color2"].default_value = (*c2, 1.0)
+    br.inputs["Mortar"].default_value = (*cm, 1.0)
+    br.offset = 0.5
+    nt.links.new(coord.outputs["Object"], br.inputs["Vector"])
+    return br
+
+
+def _mapped(nt, coord, mapping_scale):
+    mp = nt.nodes.new("ShaderNodeMapping")
+    mp.inputs["Scale"].default_value = mapping_scale
+    nt.links.new(coord.outputs["Object"], mp.inputs["Vector"])
+    return mp
+
+
+def pm_stucco(name, color):
+    m, nt, b, co = _pm_base(name, color, rough=0.78)
+    var = _mix(nt, _noise(nt, co, 0.6, 3), color, tuple(c * 0.9 for c in color))
+    nt.links.new(var, b.inputs["Base Color"])
+    _bump(nt, b, _noise(nt, co, 45.0, 6, 0.6), 0.18, 0.01)
+    return m
+
+
+def pm_stone_tiles(name, c1, c2, cm, width, height, rough=0.45):
+    m, nt, b, co = _pm_base(name, c1, rough=rough, spec=0.4)
+    br = _brick(nt, co, 1.0, width, height, 0.01, c1, c2, cm)
+    veins = _noise(nt, co, 1.2, 8, 0.7)
+    col = _mix(nt, veins, c1, c2)
+    tile = nt.nodes.new("ShaderNodeMix")
+    tile.data_type = "RGBA"
+    nt.links.new(br.outputs["Fac"], tile.inputs["Factor"])
+    nt.links.new(col, tile.inputs["A"])
+    tile.inputs["B"].default_value = (*cm, 1.0)
+    nt.links.new(tile.outputs["Result"], b.inputs["Base Color"])
+    rough_mix = _mix(nt, br.outputs["Fac"], (rough,) * 3, (0.9,) * 3)
+    nt.links.new(rough_mix, b.inputs["Roughness"])
+    # bump: grout lines + fine grain
+    add = nt.nodes.new("ShaderNodeMath")
+    add.operation = "MULTIPLY_ADD"
+    nt.links.new(_noise(nt, co, 60.0, 4, 0.5), add.inputs[0])
+    add.inputs[1].default_value = 0.15
+    nt.links.new(br.outputs["Fac"], add.inputs[2])
+    _bump(nt, b, add.outputs["Value"], 0.35, 0.01)
+    return m
+
+
+def pm_fabric(name, color, sheen=0.35, rough=0.92):
+    m, nt, b, co = _pm_base(name, color, rough=rough, spec=0.3, sheen=sheen)
+    var = _mix(nt, _noise(nt, co, 3.0, 2), color, tuple(min(1, c * 1.08) for c in color))
+    nt.links.new(var, b.inputs["Base Color"])
+    _bump(nt, b, _noise(nt, co, 300.0, 2, 0.5), 0.12, 0.003)
+    return m
+
+
+def pm_wicker(name, color):
+    m, nt, b, co = _pm_base(name, color, rough=0.62, spec=0.45)
+    w1 = nt.nodes.new("ShaderNodeTexWave")
+    w1.wave_type = "BANDS"
+    w1.bands_direction = "X"
+    w1.inputs["Scale"].default_value = 70.0
+    w1.inputs["Distortion"].default_value = 0.6
+    w2 = nt.nodes.new("ShaderNodeTexWave")
+    w2.wave_type = "BANDS"
+    w2.bands_direction = "Y"
+    w2.inputs["Scale"].default_value = 70.0
+    w2.inputs["Distortion"].default_value = 0.6
+    nt.links.new(co.outputs["Object"], w1.inputs["Vector"])
+    nt.links.new(co.outputs["Object"], w2.inputs["Vector"])
+    mul = nt.nodes.new("ShaderNodeMath")
+    mul.operation = "MULTIPLY"
+    nt.links.new(w1.outputs["Fac"], mul.inputs[0])
+    nt.links.new(w2.outputs["Fac"], mul.inputs[1])
+    _bump(nt, b, mul.outputs["Value"], 0.45, 0.01)
+    var = _mix(nt, _noise(nt, co, 8.0, 3), color, tuple(c * 0.88 for c in color))
+    nt.links.new(var, b.inputs["Base Color"])
+    return m
+
+
+def pm_marble(name, c1=(0.92, 0.91, 0.88), c2=(0.55, 0.54, 0.52)):
+    m, nt, b, co = _pm_base(name, c1, rough=0.18, spec=0.6, coat=0.3)
+    veins = _noise(nt, co, 0.8, 10, 0.75)
+    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].position = 0.42
+    ramp.color_ramp.elements[0].color = (*c1, 1.0)
+    ramp.color_ramp.elements[1].position = 0.6
+    ramp.color_ramp.elements[1].color = (*c2, 1.0)
+    e = ramp.color_ramp.elements.new(0.52)
+    e.color = (*c1, 1.0)
+    nt.links.new(veins, ramp.inputs["Fac"])
+    nt.links.new(ramp.outputs["Color"], b.inputs["Base Color"])
+    _bump(nt, b, _noise(nt, co, 90.0, 3, 0.5), 0.05, 0.003)
+    return m
+
+
+def pm_bark(name, color):
+    m, nt, b, co = _pm_base(name, color, rough=0.95, spec=0.2)
+    mp = _mapped(nt, co, (1.0, 1.0, 0.15))
+    n = nt.nodes.new("ShaderNodeTexNoise")
+    n.inputs["Scale"].default_value = 12.0
+    n.inputs["Detail"].default_value = 8.0
+    nt.links.new(mp.outputs["Vector"], n.inputs["Vector"])
+    var = _mix(nt, n.outputs["Fac"], tuple(c * 0.7 for c in color), tuple(min(1, c * 1.2) for c in color))
+    nt.links.new(var, b.inputs["Base Color"])
+    _bump(nt, b, n.outputs["Fac"], 0.8, 0.03)
+    return m
+
+
+def pm_leaf(name, color):
+    m, nt, b, co = _pm_base(name, color, rough=0.45, spec=0.5, coat=0.15)
+    var = _mix(nt, _noise(nt, co, 1.5, 3), color, (color[0] * 1.3, color[1] * 1.15, color[2] * 0.8))
+    nt.links.new(var, b.inputs["Base Color"])
+    b.inputs["Subsurface Weight"].default_value = 0.15
+    b.inputs["Subsurface Radius"].default_value = (0.2, 0.4, 0.1)
+    return m
+
+
+def pm_metal(name, color, rough=0.35, metal=0.85):
+    m, nt, b, co = _pm_base(name, color, rough=rough, metal=metal)
+    _bump(nt, b, _noise(nt, co, 150.0, 2, 0.5), 0.05, 0.002)
+    return m
+
+
+def pm_painted_wood(name, color):
+    m, nt, b, co = _pm_base(name, color, rough=0.5, spec=0.5, coat=0.2)
+    mp = _mapped(nt, co, (1.0, 25.0, 1.0))
+    n = nt.nodes.new("ShaderNodeTexNoise")
+    n.inputs["Scale"].default_value = 4.0
+    n.inputs["Detail"].default_value = 6.0
+    nt.links.new(mp.outputs["Vector"], n.inputs["Vector"])
+    _bump(nt, b, n.outputs["Fac"], 0.15, 0.005)
+    return m
+
+
+def pm_glass_bronze(name):
+    m, nt, b, co = _pm_base(name, (0.55, 0.42, 0.28), rough=0.28, metal=0.75, spec=0.6)
+    # floor bands: horizontal brick texture darkens every storey line
+    br = _brick(nt, co, 1.0, 100.0, 3.6, 0.04, (0.62, 0.42, 0.2), (0.58, 0.40, 0.2), (0.12, 0.08, 0.05))
+    mp = _mapped(nt, co, (1.0, 1.0, 1.0))
+    nt.links.new(mp.outputs["Vector"], br.inputs["Vector"])
+    nt.links.new(br.outputs["Color"], b.inputs["Base Color"])
+    _bump(nt, b, br.outputs["Fac"], 0.3, 0.02)
+    return m
+
+
+def pm_water_photo():
+    m = bpy.data.materials.new("P_Water")
+    m.use_nodes = True
+    nt = m.node_tree
+    b = nt.nodes["Principled BSDF"]
+    out = nt.nodes["Material Output"]
+    b.inputs["Base Color"].default_value = (0.85, 0.97, 1.0, 1.0)
+    b.inputs["Roughness"].default_value = 0.07
+    b.inputs["IOR"].default_value = 1.333
+    b.inputs["Transmission Weight"].default_value = 1.0
+    b.inputs["Specular IOR Level"].default_value = 0.5
+    co = nt.nodes.new("ShaderNodeTexCoord")
+    mp = nt.nodes.new("ShaderNodeMapping")
+    mp.inputs["Scale"].default_value = (1.0, 1.0, 1.0)
+    nt.links.new(co.outputs["Object"], mp.inputs["Vector"])
+    n1 = nt.nodes.new("ShaderNodeTexNoise")
+    n1.inputs["Scale"].default_value = 2.5
+    n1.inputs["Detail"].default_value = 5.0
+    n1.inputs["Roughness"].default_value = 0.55
+    nt.links.new(mp.outputs["Vector"], n1.inputs["Vector"])
+    bump = nt.nodes.new("ShaderNodeBump")          # gentle ripples; strong bump scatters tower reflections
+    bump.inputs["Strength"].default_value = 0.05
+    bump.inputs["Distance"].default_value = 0.01
+    nt.links.new(n1.outputs["Fac"], bump.inputs["Height"])
+    nt.links.new(bump.outputs["Normal"], b.inputs["Normal"])
+    b.inputs["Base Color"].default_value = (0.55, 0.92, 0.95, 1.0)
+    b.inputs["Alpha"].default_value = 1.0
+    # Let sunlight through to the pool floor: shadow rays see a transparent shader, so the
+    # basin is lit directly even with refractive caustics disabled in the render settings.
+    lp = nt.nodes.new("ShaderNodeLightPath")
+    tr = nt.nodes.new("ShaderNodeBsdfTransparent")
+    mix = nt.nodes.new("ShaderNodeMixShader")
+    nt.links.new(lp.outputs["Is Shadow Ray"], mix.inputs["Fac"])
+    nt.links.new(b.outputs["BSDF"], mix.inputs[1])
+    nt.links.new(tr.outputs["BSDF"], mix.inputs[2])
+    nt.links.new(mix.outputs["Shader"], out.inputs["Surface"])
+    return m
+
+
+def make_photo_materials():
+    """One procedural material per palette entry, in palette order (matches face material_index)."""
+    global PHOTO_MATS
+    specs = {
+        "ivory":  lambda: pm_stucco("ivory", (0.90, 0.85, 0.74)),
+        "deck":   lambda: pm_stone_tiles("deck", (0.82, 0.75, 0.62), (0.74, 0.66, 0.53), (0.60, 0.54, 0.44), 1.2, 0.6),
+        "walk":   lambda: pm_stone_tiles("walk", (0.62, 0.59, 0.54), (0.54, 0.51, 0.46), (0.40, 0.38, 0.35), 0.6, 0.6, rough=0.55),
+        "orange": lambda: pm_fabric("orange", (0.92, 0.38, 0.06)),
+        "yellow": lambda: pm_fabric("yellow", (0.92, 0.74, 0.18)),
+        "red":    lambda: pm_fabric("red", (0.72, 0.06, 0.05), sheen=0.15, rough=0.8),
+        "white":  lambda: pm_wicker("white", (0.93, 0.92, 0.88)),
+        "water":  lambda: pm_stucco("plaster", (0.30, 0.68, 0.74)),
+        "green":  lambda: pm_leaf("leaf", (0.12, 0.38, 0.14)),
+        "trunk":  lambda: pm_bark("bark", (0.40, 0.29, 0.18)),
+        "purple": lambda: pm_fabric("purple", (0.42, 0.18, 0.58), sheen=0.6, rough=0.85),
+        "pink":   lambda: pm_fabric("pink", (0.85, 0.35, 0.50), sheen=0.6, rough=0.85),
+        "blue":   lambda: pm_fabric("blue", (0.12, 0.35, 0.80), sheen=0.6, rough=0.85),
+        "dark":   lambda: pm_metal("dark", (0.05, 0.05, 0.06), rough=0.4, metal=0.7),
+        "teal":   lambda: pm_painted_wood("teal", (0.40, 0.70, 0.68)),
+        "marble": lambda: pm_marble("marble"),
+    }
+    PHOTO_MATS = [specs[name]() for name, _ in PALETTE]
+    MATS["Water"] = pm_water_photo()
+    MATS["Glass_Bronze"] = pm_glass_bronze("glass_bronze")
+    MATS["Asphalt"] = pm_stone_tiles("asphalt", (0.22, 0.22, 0.22), (0.20, 0.20, 0.21), (0.18, 0.18, 0.18), 40.0, 40.0, rough=0.9)
+    MATS["Sand"] = pm_stucco("sand", (0.70, 0.62, 0.48))
+
+
+def build_photo_details():
+    """Balustrade posts, cabana awning scallops, umbrellas with 16 segments: photo mode only."""
+    bm = bmesh.new()
+    for a0, a1 in ((104.0, 151.0), (29.0, 76.0)):
+        n = 40
+        for i in range(n + 1):
+            a = a0 + (a1 - a0) * i / n
+            x, y = arc_xy(371.5, a)
+            bm_cyl(bm, (x, y, 4.35), 0.06, 0.9, "white", 8)
+    add_obj("Balustrade_Posts", finish_mesh("M_BalustradePosts", bm), "Cabanas_Upper")
+
+    # scallop drops under every cabana / bungalow awning edge
+    bm = bmesh.new()
+    for ob in list(bpy.data.objects):
+        if not ob.name.startswith("T_"):
+            continue
+        kind = ob.get("type")
+        if kind not in ("lower_cabana", "upper_cabana", "bungalow"):
+            continue
+        width = 6.2 if kind == "bungalow" else 4.4
+        front = -3.8 if kind == "bungalow" else (-3.0 if kind == "lower_cabana" else -2.8)
+        zz = (3.1 if kind == "bungalow" else (2.7 if kind == "lower_cabana" else 2.6)) + ob.location.z
+        count = int(width / 0.45)
+        for i in range(count):
+            lx = -width / 2 + (i + 0.5) * width / count
+            local = Vector((lx, front, 0))
+            local.rotate(ob.rotation_euler)
+            wx, wy = ob.location.x + local.x, ob.location.y + local.y
+            bm_cyl(bm, (wx, wy, zz), 0.22, 0.25, "red" if i % 2 == 0 else "white", 8)
+    add_obj("Awning_Scallops", finish_mesh("M_AwningScallops", bm), "Cabanas_Lower")
+
+
+def build_context():
+    """Surroundings for the photo renders: ground, the Encore tower and the casino low-rise."""
+    bm = bmesh.new()
+    bm_prism(bm, [(-400, -400), (400, -400), (400, 400), (-400, 400)], -0.6, -0.35, "deck")
+    m = finish_mesh("M_Ground", bm, "Asphalt")
+    ground = add_obj("Ground", m, "Context")
+    cut_hole(ground, [P(x, y) for x, y in POOL_PX], -3.0, 1.0)
+
+    # Encore tower: curved bronze-glass slab behind the crescent (height and radius are estimates)
+    bm = bmesh.new()
+    bm_prism(bm, ring_poly(560, 598, 56, 124, 24), -0.3, 150.0, "ivory")
+    bm_prism(bm, ring_poly(556, 602, 56, 124, 24), 150.0, 153.0, "ivory")  # crown
+    m = finish_mesh("M_EncoreTower", bm, "Glass_Bronze")
+    add_obj("Encore_Tower", m, "Context")
+
+    # Encore casino low-rise where the backstage corridor leads, plus a podium behind the tower
+    bm = bmesh.new()
+    bm_prism(bm, [P(120, 860), P(680, 860), P(680, 1180), P(120, 1180)], -0.3, 15.0, "ivory")
+    bm_prism(bm, [P(120, 860), P(680, 860), P(680, 1180), P(120, 1180)], 15.0, 16.0, "white")
+    bm_prism(bm, ring_poly(452, 470, 40, 140, 24), -0.3, 12.0, "ivory")
+    add_obj("Encore_Casino", finish_mesh("M_EncoreCasino", bm), "Context")
+
+    # Extra palms outside the deck for depth
+    mesh = proto("palm", f_palm)
+    pts = [(-70, -10), (-66, 8), (-60, 24), (70, -10), (66, 8), (60, 24), (-30, -60), (30, -60),
+           (-54, -40), (54, -40), (-45, 42), (45, 42)]
+    for i, (x, y) in enumerate(pts):
+        add_obj("PalmCtx_%02d" % i, mesh, "Context", (x, y, -0.3), math.radians((i * 71) % 360))
+
+
 # --------------------------------------------------------------------------------------
 # Lighting, cameras, render, export
 # --------------------------------------------------------------------------------------
@@ -800,17 +1165,23 @@ def setup_world_and_lights():
     nt = world.node_tree
     bg = nt.nodes["Background"]
     sky = nt.nodes.new("ShaderNodeTexSky")
-    sky.sky_type = "MULTIPLE_SCATTERING"  # Nishita in Blender 4.x
+    try:
+        sky.sky_type = "MULTIPLE_SCATTERING"   # Blender 5.x name for the Nishita model
+    except TypeError:
+        sky.sky_type = "NISHITA"               # Blender 4.x
     sky.sun_elevation = math.radians(52)
     sky.sun_rotation = math.radians(210)
     sky.sun_intensity = 0.35
     sky.altitude = 600
+    if hasattr(sky, "sun_disc"):
+        sky.sun_disc = False                   # the Sun lamp below provides the direct light
     nt.links.new(sky.outputs["Color"], bg.inputs["Color"])
-    bg.inputs["Strength"].default_value = 0.35
+    bg.inputs["Strength"].default_value = 0.45 if LOOK == "photo" else 0.35
 
     sun = bpy.data.objects.new("Sun", bpy.data.lights.new("Sun", "SUN"))
-    sun.data.energy = 4.0
-    sun.data.angle = math.radians(1.5)
+    sun.data.energy = 4.5 if LOOK == "photo" else 4.0
+    sun.data.angle = math.radians(0.6 if LOOK == "photo" else 1.5)
+    sun.data.color = (1.0, 0.96, 0.90)
     sun.rotation_euler = (math.radians(38), 0, math.radians(-30))
     coll("Lighting").objects.link(sun)
 
@@ -832,8 +1203,16 @@ def setup_cameras():
     target = Vector((2.0, 16.0, 1.0))
     persp.rotation_euler = (target - persp.location).to_track_quat("-Z", "Y").to_euler()
     coll("Cameras").objects.link(persp)
+
+    eye = bpy.data.objects.new("Cam_Eye", bpy.data.cameras.new("Cam_Eye"))
+    eye.data.lens = 24
+    eye.data.clip_end = 1000
+    eye.location = (-3.0, 2.2, 3.4)          # standing on the stage next to the DJ booth
+    target = Vector((2.0, 30.0, 2.0))
+    eye.rotation_euler = (target - eye.location).to_track_quat("-Z", "Y").to_euler()
+    coll("Cameras").objects.link(eye)
     scene.camera = top
-    return top, persp
+    return top, persp, eye
 
 
 def render(camera, path, w, h, samples):
@@ -841,9 +1220,14 @@ def render(camera, path, w, h, samples):
     scene.camera = camera
     scene.render.engine = "CYCLES"
     scene.cycles.device = "CPU"
-    scene.cycles.samples = samples
-    scene.cycles.use_denoising = True
-    scene.cycles.max_bounces = 4
+    has_oidn = getattr(bpy.app.build_options, "openimagedenoise", False)
+    scene.cycles.samples = samples if has_oidn else samples * 2
+    scene.cycles.use_denoising = bool(has_oidn)   # Ubuntu's apt Blender is built without OIDN
+    scene.cycles.max_bounces = 8 if LOOK == "photo" else 4
+    scene.cycles.transparent_max_bounces = 8
+    scene.cycles.caustics_reflective = False
+    scene.cycles.caustics_refractive = False
+    scene.view_settings.exposure = -0.7 if LOOK == "photo" else 0.0
     scene.render.resolution_x = w
     scene.render.resolution_y = h
     scene.render.resolution_percentage = 100
@@ -895,7 +1279,13 @@ def main():
     ap.add_argument("--out", default=os.path.dirname(os.path.abspath(__file__)))
     ap.add_argument("--no-render", action="store_true")
     ap.add_argument("--samples", type=int, default=48)
+    ap.add_argument("--cameras", default="top,perspective,eyelevel",
+                    help="comma-separated subset of: top, perspective, eyelevel")
+    ap.add_argument("--look", choices=["stylized", "photo"], default="stylized",
+                    help="photo: procedural materials, backdrop and Cycles-only outputs")
     args = ap.parse_args(argv)
+    global LOOK
+    LOOK = args.look
     out = args.out
     os.makedirs(os.path.join(out, "renders"), exist_ok=True)
 
@@ -904,8 +1294,12 @@ def main():
     scene = bpy.context.scene
     scene.unit_settings.system = "METRIC"
     scene.unit_settings.length_unit = "METERS"
+    scene.render.engine = "CYCLES"
+    scene.cycles.device = "CPU"
 
     MATS["Atlas"], MATS["Water"] = make_materials(out)
+    if LOOK == "photo":
+        make_photo_materials()
     for c in ("Pools", "Cabanas_Lower", "Cabanas_Upper", "Bungalows", "Gaming", "Stage",
               "Backstage", "Bars", "Walkways"):
         coll(c)
@@ -924,20 +1318,27 @@ def main():
         build_pool_furniture()
         build_deck_furniture()
         tag = "stage2_full"
+        if LOOK == "photo":
+            build_photo_details()
+            build_context()
+            tag = "photo"
 
     setup_world_and_lights()
-    top, persp = setup_cameras()
+    top, persp, eye = setup_cameras()
 
     tris = triangle_count()
     tables = [o for o in bpy.data.objects if o.name.startswith("T_")]
     print("[stats] objects=%d tables=%d unique_meshes=%d triangles=%d build=%.1fs"
           % (STATS["objects"], len(tables), len(bpy.data.meshes), tris, time.time() - t0))
 
-    blend = os.path.join(out, "encore-beach-club.blend")
+    blend = os.path.join(out, "encore-beach-club%s.blend" % ("-photo" if LOOK == "photo" else ""))
     bpy.ops.wm.save_as_mainfile(filepath=blend, compress=True)
     print("[size] %s: %.1f KB" % (os.path.basename(blend), os.path.getsize(blend) / 1024))
 
-    if args.stage == "full":
+    if LOOK == "photo":
+        print("[export] photo look uses procedural node materials; GLB export is skipped "
+              "(use --look stylized for the web asset)")
+    elif args.stage == "full":
         export_glb(os.path.join(out, "renders", "encore-beach-club-uncompressed.glb"), draco=False)
         export_glb(os.path.join(out, "encore-beach-club.glb"), draco=True)
     else:
@@ -947,9 +1348,18 @@ def main():
         for name in ("Gaming_Roof", "Backstage_Roof"):   # exported, but hidden in the previews
             if name in bpy.data.objects:
                 bpy.data.objects[name].hide_render = True
-        render(top, os.path.join(out, "renders", tag + "_top.png"), 1400, 1500, args.samples)
-        if args.stage == "full":
-            render(persp, os.path.join(out, "renders", tag + "_perspective.png"), 1600, 1000, args.samples)
+        cams = [c.strip() for c in args.cameras.split(",")]
+        if LOOK == "photo":
+            if "perspective" in cams:
+                render(persp, os.path.join(out, "renders", tag + "_perspective.png"), 1920, 1200, args.samples)
+            if "eyelevel" in cams:
+                render(eye, os.path.join(out, "renders", tag + "_eyelevel.png"), 1920, 1080, args.samples)
+            if "top" in cams:
+                render(top, os.path.join(out, "renders", tag + "_top.png"), 1600, 1700, args.samples)
+        else:
+            render(top, os.path.join(out, "renders", tag + "_top.png"), 1400, 1500, args.samples)
+            if args.stage == "full":
+                render(persp, os.path.join(out, "renders", tag + "_perspective.png"), 1600, 1000, args.samples)
     print("[done] total %.1fs" % (time.time() - t0))
 
 
