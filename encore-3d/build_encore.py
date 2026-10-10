@@ -407,36 +407,101 @@ def f_gaming_table(bm):
 
 
 def f_palm(bm):
-    h = 11.0
-    photo = LOOK == "photo"
-    bm_cyl(bm, (0, 0, h / 2), 0.38, h, "trunk", 12 if photo else 6, radius2=0.22)
+    """Detailed procedural palm: curved segmented trunk, pinnate fronds with leaflets, coconuts.
+
+    About 1.5k triangles; shared by every palm instance (random per-instance rotation/scale
+    gives variety).  Stylized and photo looks both use it.
+    """
+    import random
+    rnd = random.Random(1702)
     uv = bm.loops.layers.uv.verify()
-    u, v = palette_uv(CI["green"])
-    n_fronds = 13 if photo else 7
-    for i in range(n_fronds):
-        a = math.radians(i * 360.0 / n_fronds + (i % 2) * 11)
-        droop = 0.0 if not photo else (-0.9 if i % 3 == 0 else 0.3)
-        d = Vector((math.cos(a), math.sin(a), 0))
-        s = Vector((-math.sin(a), math.cos(a), 0))
-        # polyline of the frond spine: 3 segments in photo mode
-        pts = [Vector((0, 0, h))]
-        if photo:
-            pts += [pts[0] + d * 1.3 + Vector((0, 0, 0.6 + droop * 0.2)),
-                    pts[0] + d * 2.6 + Vector((0, 0, 0.3 + droop * 0.8)),
-                    pts[0] + d * 3.8 + Vector((0, 0, -1.2 + droop * 1.4))]
-            widths = [0.25, 0.75, 0.6, 0.12]
-        else:
-            pts += [pts[0] + d * 1.7 + Vector((0, 0, 0.5)), pts[0] + d * 3.3 + Vector((0, 0, -1.3))]
-            widths = [0.3, 0.7, 0.15]
-        ring = []
-        for pt, w in zip(pts, widths):
-            ring.append((bm.verts.new(pt + s * w), bm.verts.new(pt - s * w)))
-        for (a0, b0), (a1, b1) in zip(ring, ring[1:]):
-            f = bm.faces.new((b0, a0, a1, b1))
-            f.material_index = CI["green"]
-            for loop in f.loops:
-                loop[uv].uv = (u, v)
-    bm_cyl(bm, (0, 0, h), 0.7, 1.0, "green", 6)
+    uv_green, uv_trunk = palette_uv(CI["green"]), palette_uv(CI["trunk"])
+
+    def face(verts, color_uv, color):
+        try:
+            f = bm.faces.new(verts)
+        except ValueError:
+            return None
+        f.material_index = CI[color]
+        for loop in f.loops:
+            loop[uv].uv = color_uv
+        return f
+
+    # ---- trunk: 14 rings, slight lean and S-curve, alternating bulges for the leaf scars
+    h = 11.0
+    n_rings, segs = 14, 10
+    rings = []
+    for i in range(n_rings + 1):
+        t = i / n_rings
+        c = Vector((0.9 * t * t, 0.35 * math.sin(t * 2.6) * t, t * h))
+        r = 0.42 * (1.0 - 0.45 * t) * (1.08 if i % 2 else 1.0)
+        ring = [bm.verts.new(c + Vector((r * math.cos(a), r * math.sin(a), 0.0)))
+                for a in (k * 2 * math.pi / segs for k in range(segs))]
+        rings.append(ring)
+    for r0, r1 in zip(rings, rings[1:]):
+        for k in range(segs):
+            face((r0[k], r0[(k + 1) % segs], r1[(k + 1) % segs], r1[k]), uv_trunk, "trunk")
+    face(list(rings[0]), uv_trunk, "trunk")
+    top = Vector((0.9, 0.35 * math.sin(2.6), h))
+    # crown boss and coconuts
+    boss = bmesh.ops.create_icosphere(bm, subdivisions=1, radius=0.55)
+    bmesh.ops.translate(bm, vec=top + Vector((0, 0, 0.1)), verts=boss["verts"])
+    _stamp(bm, _faces_of(boss["verts"]), "green")
+    for k in range(5):
+        a = k * 2 * math.pi / 5 + 0.4
+        nut = bmesh.ops.create_icosphere(bm, subdivisions=1, radius=0.17)
+        bmesh.ops.translate(bm, vec=top + Vector((0.55 * math.cos(a), 0.55 * math.sin(a), -0.35)),
+                            verts=nut["verts"])
+        _stamp(bm, _faces_of(nut["verts"]), "trunk")
+
+    # ---- fronds: arching rachis strip with pairs of drooping leaflets
+    n_fronds = 21
+    n_seg = 11
+    for k in range(n_fronds):
+        a = k * 2 * math.pi / n_fronds + rnd.uniform(-0.12, 0.12)
+        tier = k % 3                      # 0: young upright, 1: mid, 2: old drooping
+        elev = (1.05, 0.55, 0.05)[tier] + rnd.uniform(-0.1, 0.1)
+        length = (3.6, 4.6, 4.9)[tier] * rnd.uniform(0.9, 1.1)
+        droop = (1.6, 2.6, 3.4)[tier]
+        d = Vector((math.cos(a), math.sin(a), 0.0))
+        side = Vector((-math.sin(a), math.cos(a), 0.0))
+        pts = []
+        for j in range(n_seg + 1):
+            s = j / n_seg
+            pts.append(top + Vector((0, 0, 0.25)) + d * (length * s * math.cos(elev))
+                       + Vector((0, 0, length * s * math.sin(elev) - droop * s * s)))
+        # rachis strip
+        strip = []
+        for j, pt in enumerate(pts):
+            w = 0.09 * (1.0 - 0.7 * j / n_seg)
+            strip.append((bm.verts.new(pt + side * w), bm.verts.new(pt - side * w)))
+        for (a0, b0), (a1, b1) in zip(strip, strip[1:]):
+            face((b0, a0, a1, b1), uv_green, "green")
+        # leaflets
+        for j in range(1, n_seg + 1):
+            s = j / n_seg
+            tangent = (pts[j] - pts[j - 1]).normalized()
+            env = math.sin(math.pi * min(1.0, 0.15 + s * 0.95))     # short near base and tip
+            lf = (0.4 + 1.25 * env) * (1.0 - 0.25 * s)
+            for sign in (1.0, -1.0):
+                hang = 0.75 + 0.35 * s                                 # leaflets hang more toward the tip
+                out = side * sign * math.cos(hang) + Vector((0, 0, -math.sin(hang)))
+                base = pts[j]
+                tip = base + out * lf + tangent * (0.22 * lf)
+                w0, w1 = 0.1, 0.03
+                face((bm.verts.new(base - tangent * w0), bm.verts.new(base + tangent * w0),
+                      bm.verts.new(tip + tangent * w1), bm.verts.new(tip - tangent * w1)),
+                     uv_green, "green")
+    # a few hanging dead fronds under the crown
+    for k in range(4):
+        a = k * 2 * math.pi / 4 + 0.6
+        d = Vector((math.cos(a), math.sin(a), 0.0))
+        side = Vector((-math.sin(a), math.cos(a), 0.0))
+        p0 = top + d * 0.45 - Vector((0, 0, 0.2))
+        p1 = p0 + d * 0.9 - Vector((0, 0, 2.2))
+        face((bm.verts.new(p0 - side * 0.25), bm.verts.new(p0 + side * 0.25),
+              bm.verts.new(p1 + side * 0.12), bm.verts.new(p1 - side * 0.12)), uv_trunk, "trunk")
+
 
 
 def f_umbrella(bm):
@@ -792,7 +857,9 @@ def build_deck_furniture():
         table("G%d" % (i + 1), "gaming_table", "Gaming", P(345 + i * 15.7, 262), 0.0, math.pi)
     mesh = proto("palm", f_palm)
     for i, (px, py) in enumerate(PALMS):
-        add_obj("Palm_%02d" % i, mesh, "Landscape", (*P(px, py), 0.0), math.radians((i * 47) % 360))
+        ob = add_obj("Palm_%02d" % i, mesh, "Landscape", (*P(px, py), 0.0), math.radians((i * 47) % 360))
+        sc = 0.85 + 0.3 * ((i * 37) % 10) / 9.0
+        ob.scale = (sc, sc, sc * (0.9 + 0.2 * ((i * 53) % 7) / 6.0))
     mesh = proto("umbrella", f_umbrella)
     for i, (px, py) in enumerate(UMBRELLAS):
         add_obj("Umbrella_%02d" % i, mesh, "Landscape", (*P(px, py), 0.0))
@@ -1107,7 +1174,7 @@ def make_photo_materials():
         "red":    lambda: pm_fabric("red", (0.72, 0.06, 0.05), sheen=0.15, rough=0.8),
         "white":  lambda: pm_wicker("white", (0.93, 0.92, 0.88)),
         "water":  lambda: pm_stucco("plaster", (0.30, 0.68, 0.74)),
-        "green":  lambda: pm_leaf("leaf", (0.12, 0.38, 0.14)),
+        "green":  lambda: pm_leaf("leaf", (0.09, 0.34, 0.11)),
         "trunk":  lambda: pm_bark("bark", (0.40, 0.29, 0.18)),
         "purple": lambda: pm_fabric("purple", (0.42, 0.18, 0.58), sheen=0.6, rough=0.85),
         "pink":   lambda: pm_fabric("pink", (0.85, 0.35, 0.50), sheen=0.6, rough=0.85),
@@ -1182,7 +1249,9 @@ def build_context():
     pts = [(-70, -10), (-66, 8), (-60, 24), (70, -10), (66, 8), (60, 24), (-30, -60), (30, -60),
            (-54, -40), (54, -40), (-45, 42), (45, 42)]
     for i, (x, y) in enumerate(pts):
-        add_obj("PalmCtx_%02d" % i, mesh, "Context", (x, y, -0.3), math.radians((i * 71) % 360))
+        ob = add_obj("PalmCtx_%02d" % i, mesh, "Context", (x, y, -0.3), math.radians((i * 71) % 360))
+        sc = 0.9 + 0.35 * ((i * 29) % 8) / 7.0
+        ob.scale = (sc, sc, sc)
 
 
 

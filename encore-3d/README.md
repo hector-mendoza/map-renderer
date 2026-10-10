@@ -131,6 +131,9 @@ python -m http.server 8000     # then open http://localhost:8000/index.html
 - **Pool shape**: modelled as one connected basin (south lobe, centre, north lobe) traced from the
   plan. The brief describes three pools joined by walkways; the plan reads as one body, so the
   plan won.
+- **Palms** are procedural (curved segmented trunk, 21 pinnate fronds with individual leaflets,
+  coconuts, about 1.5k triangles, one shared mesh with per-instance scale and rotation). They
+  are not a scanned species model.
 - **Lily pad positions** are distributed evenly along arcs on the outer edge of each lobe, not
   traced individually. Table numbers within the 500/800 beach couch rows and inside the
   backstage corridor are approximate (the plan's labels are too small to read reliably).
