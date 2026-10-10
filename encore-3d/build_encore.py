@@ -93,25 +93,46 @@ PALETTE = [
     ("dark",   (0.20, 0.20, 0.22)),   # 13 stage, DJ booth, bars top
     ("teal",   (0.45, 0.75, 0.72)),   # 14 bungalow legend colour
     ("marble", (0.82, 0.82, 0.80)),   # 15 bar counters / pool basin
+    # people
+    ("skin1",  (0.93, 0.76, 0.62)),   # 16
+    ("skin2",  (0.76, 0.55, 0.40)),   # 17
+    ("skin3",  (0.45, 0.30, 0.20)),   # 18
+    ("hair1",  (0.12, 0.08, 0.05)),   # 19 dark hair
+    ("hair2",  (0.65, 0.48, 0.25)),   # 20 blonde / light brown
+    ("swim1",  (0.90, 0.15, 0.35)),   # 21 magenta
+    ("swim2",  (0.10, 0.60, 0.85)),   # 22 cyan
+    ("swim3",  (0.95, 0.85, 0.20)),   # 23 yellow
+    ("swim4",  (0.15, 0.15, 0.18)),   # 24 black
+    ("swim5",  (0.98, 0.98, 0.95)),   # 25 white
+    ("swim6",  (0.20, 0.65, 0.35)),   # 26 green
+    ("staff",  (0.96, 0.96, 0.94)),   # 27 staff shirt
+    ("slacks", (0.10, 0.10, 0.12)),   # 28 staff trousers
+    ("tray",   (0.75, 0.75, 0.78)),   # 29 metal tray
 ]
+PALETTE_GRID = 8
 CI = {name: i for i, (name, _) in enumerate(PALETTE)}
 
 
 def palette_uv(idx):
-    col, row = idx % 4, idx // 4
-    return ((col + 0.5) / 4.0, (row + 0.5) / 4.0)
+    g = PALETTE_GRID
+    col, row = idx % g, idx // g
+    return ((col + 0.5) / g, (row + 0.5) / g)
 
 
 def make_palette_image(out_dir):
-    size = 64
+    g = PALETTE_GRID
+    cell = 16
+    size = g * cell
     img = bpy.data.images.new("encore_palette", size, size, alpha=False)
     px = [0.0] * (size * size * 4)
     for y in range(size):
         for x in range(size):
-            idx = (y // 16) * 4 + (x // 16)
-            r, g, b = PALETTE[idx][1]
+            idx = (y // cell) * g + (x // cell)
+            r, g_, b = PALETTE[idx][1] if idx < len(PALETTE) else (0.5, 0.5, 0.5)
+            g_ = g_  # noqa
+            r, gg, b = (PALETTE[idx][1] if idx < len(PALETTE) else (0.5, 0.5, 0.5))
             o = (y * size + x) * 4
-            px[o:o + 4] = [r, g, b, 1.0]
+            px[o:o + 4] = [r, gg, b, 1.0]
     img.pixels = px
     path = os.path.join(out_dir, "palette.png")
     img.filepath_raw = path
@@ -298,7 +319,7 @@ def proto(name, builder, material="Atlas"):
     if name not in PROTOS:
         bm = bmesh.new()
         builder(bm)
-        if LOOK == "photo" and name != "palm":
+        if LOOK == "photo" and name != "palm" and not name.startswith(("person_", "staff_")):
             bm.normal_update()
             edges = [e for e in bm.edges if e.is_boundary or
                      (len(e.link_faces) == 2 and e.calc_face_angle(0.0) > math.radians(30))]
@@ -865,6 +886,152 @@ def build_deck_furniture():
         add_obj("Umbrella_%02d" % i, mesh, "Landscape", (*P(px, py), 0.0))
 
 
+
+
+# --------------------------------------------------------------------------------------
+# People: low-poly guests and staff (one shared mesh per variant, instanced)
+# --------------------------------------------------------------------------------------
+def _person_builder(skin, hair, top, bottom, pose, staff=False):
+    def build(bm):
+        # legs
+        for sx in (-0.1, 0.1):
+            bm_cyl(bm, (sx, 0, 0.42), 0.085, 0.84, bottom if staff else skin, 8)
+        if not staff:                                  # swim shorts / bikini bottom
+            bm_cyl(bm, (0, 0, 0.9), 0.2, 0.22, bottom, 10)
+        else:
+            bm_cyl(bm, (0, 0, 0.9), 0.2, 0.22, bottom, 10)
+        # torso
+        bm_cyl(bm, (0, 0, 1.22), 0.19, 0.5, top if (staff or pose == "shirt") else skin, 10, radius2=0.17)
+        bm_box(bm, (0, 0, 1.46), (0.42, 0.24, 0.1), top if (staff or pose == "shirt") else skin)   # shoulders
+        if not staff and pose != "shirt":
+            bm_box(bm, (0, 0, 1.33), (0.36, 0.24, 0.12), top)                                    # bikini top / tan line
+        # neck + head + hair
+        bm_cyl(bm, (0, 0, 1.55), 0.06, 0.08, skin, 6)
+        head = bmesh.ops.create_icosphere(bm, subdivisions=1, radius=0.11)
+        bmesh.ops.translate(bm, vec=Vector((0, 0, 1.68)), verts=head["verts"])
+        _stamp(bm, _faces_of(head["verts"]), skin)
+        cap = bmesh.ops.create_icosphere(bm, subdivisions=1, radius=0.115)
+        bmesh.ops.translate(bm, vec=Vector((0, 0.02, 1.71)), verts=cap["verts"])
+        _stamp(bm, _faces_of(cap["verts"]), hair)
+        # arms
+        if pose == "up":
+            for sx in (-0.28, 0.28):
+                bm_cyl(bm, (sx, 0, 1.78), 0.05, 0.6, skin, 6)
+                bm_cyl(bm, (sx, 0, 2.1), 0.055, 0.06, skin, 6)
+        elif staff:
+            bm_cyl(bm, (-0.27, 0, 1.2), 0.05, 0.56, top, 6)
+            bm_cyl(bm, (0.27, -0.2, 1.3), 0.05, 0.3, top, 6)         # upper arm
+            bm_cyl(bm, (0.27, -0.33, 1.15), 0.05, 0.1, skin, 6)
+            bm_cyl(bm, (0.3, -0.45, 1.2), 0.2, 0.02, "tray", 12)      # tray
+            bm_cyl(bm, (0.26, -0.45, 1.26), 0.035, 0.1, "swim5", 6)   # glasses on tray
+            bm_cyl(bm, (0.36, -0.4, 1.26), 0.035, 0.1, "swim5", 6)
+        else:
+            for sx in (-0.27, 0.27):
+                bm_cyl(bm, (sx, 0, 1.2), 0.05, 0.56, skin, 6)
+        bm_cyl(bm, (0, 0, 0.0), 0.11, 0.0001, skin, 6) if False else None
+    return build
+
+
+_PERSON_VARIANTS = []
+for _i, (skin, hair, top, bottom) in enumerate([
+        ("skin1", "hair2", "swim1", "swim4"), ("skin2", "hair1", "swim2", "swim5"),
+        ("skin3", "hair1", "swim3", "swim4"), ("skin1", "hair1", "swim6", "swim2"),
+        ("skin2", "hair2", "swim5", "swim1"), ("skin3", "hair1", "swim4", "swim3")]):
+    for pose in ("down", "up", "shirt"):
+        name = "person_%d_%s" % (_i, pose)
+        FURNITURE[name] = _person_builder(skin, hair, top, bottom, pose)
+        _PERSON_VARIANTS.append(name)
+for _i, skin in enumerate(("skin1", "skin2", "skin3")):
+    name = "staff_%d" % _i
+    FURNITURE[name] = _person_builder(skin, "hair1", "staff", "slacks", "down", staff=True)
+
+
+def _point_in_poly(x, y, poly):
+    inside = False
+    j = len(poly) - 1
+    for i in range(len(poly)):
+        xi, yi = poly[i]
+        xj, yj = poly[j]
+        if (yi > y) != (yj > y) and x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi:
+            inside = not inside
+        j = i
+    return inside
+
+
+def build_people():
+    """Scatter guests and staff: dance floor, pool deck, in the water, bars, stage, backstage."""
+    import random
+    rnd = random.Random(2026)
+    furniture_xy = [(o.location.x, o.location.y) for o in bpy.data.objects
+                    if o.name.startswith("T_") or o.name.startswith("Palm")]
+    pool_poly = [P(x, y) for x, y in POOL_PX]
+    stats = {"guest": 0, "staff": 0}
+
+    def clear(x, y, r=1.1):
+        return all((x - fx) ** 2 + (y - fy) ** 2 > r * r for fx, fy in furniture_xy)
+
+    def place(kind, x, y, z=0.0, pose=None, variant=None):
+        if kind == "staff":
+            name = variant or "staff_%d" % rnd.randrange(3)
+            zone = "People"
+        else:
+            name = variant or "person_%d_%s" % (rnd.randrange(6), pose or rnd.choice(("down", "down", "up", "shirt")))
+            zone = "People"
+        mesh = proto(name, FURNITURE[name])
+        stats[kind] += 1
+        ob = add_obj("%s_%03d" % (kind.capitalize(), stats[kind]), mesh, zone, (x, y, z),
+                     rnd.uniform(0, 2 * math.pi), {"type": kind})
+        sc = rnd.uniform(0.93, 1.06)
+        ob.scale = (sc, sc, sc)
+        furniture_xy.append((x, y))
+        return ob
+
+    def scatter(kind, px0, px1, py0, py1, count, z=0.0, pose=None, in_pool=None, tries=400):
+        n = 0
+        for _ in range(tries):
+            if n >= count:
+                break
+            x, y = P(rnd.uniform(px0, px1), rnd.uniform(py0, py1))
+            if in_pool is not None and _point_in_poly(x, y, pool_poly) != in_pool:
+                continue
+            if not clear(x, y, 0.9 if in_pool else 1.1):
+                continue
+            place(kind, x, y, z, pose)
+            n += 1
+
+    # dance floor in front of the stage: dense, many arms up
+    scatter("guest", 360, 460, 445, 528, 34, pose=None, in_pool=False)
+    for _ in range(12):
+        x, y = P(rnd.uniform(365, 455), rnd.uniform(455, 525))
+        if clear(x, y, 0.8):
+            place("guest", x, y, 0.0, "up")
+    # in the pool (standing in 1.3 m of water: hide the legs below the surface)
+    scatter("guest", 215, 590, 310, 438, 26, z=-1.05, pose="down", in_pool=True)
+    # deck strollers and groups
+    scatter("guest", 180, 620, 280, 330, 14, in_pool=False)
+    scatter("guest", 190, 610, 430, 530, 18, in_pool=False)
+    scatter("guest", 300, 500, 232, 262, 6, in_pool=False)          # gaming pavilion
+    # queues at the bars
+    for cx, cy, w in ((172, 425, 60), (586, 455, 36), (670, 395, 12), (400, 212, 120)):
+        for _ in range(4):
+            x, y = P(cx + rnd.uniform(-w / 2, w / 2), cy + rnd.uniform(-4, 4))
+            if clear(x, y, 0.7):
+                place("guest", x, y, 0.0, "shirt" if rnd.random() < 0.5 else "down")
+    # backstage corridor
+    scatter("guest", 365, 440, 590, 830, 14, in_pool=False)
+    # stage: DJ and two dancers
+    place("guest", 0.0, 0.0, 1.2, "shirt", "person_1_shirt")
+    place("guest", -2.4, 0.4, 1.2, "up", "person_0_up")
+    place("guest", 2.4, 0.4, 1.2, "up", "person_4_up")
+    # staff: behind bars and on the walkways
+    for cx, cy in ((172, 400), (586, 428), (690, 380), (400, 185), (446, 660), (508, 500)):
+        x, y = P(cx, cy)
+        place("staff", x, y, 0.0)
+    scatter("staff", 200, 600, 290, 520, 12, in_pool=False)
+    scatter("staff", 330, 470, 600, 820, 3, in_pool=False)
+    print("[people] guests=%d staff=%d" % (stats["guest"], stats["staff"]))
+
+
 def build_blockout():
     """Stage 1: flat zone slabs only, for comparing against the floor plan."""
     zones = [
@@ -1095,6 +1262,13 @@ def pm_leaf(name, color):
     return m
 
 
+def pm_skin(name, color):
+    m, nt, b, co = _pm_base(name, color, rough=0.55, spec=0.4)
+    b.inputs["Subsurface Weight"].default_value = 0.12
+    b.inputs["Subsurface Radius"].default_value = (1.0, 0.3, 0.15)
+    return m
+
+
 def pm_metal(name, color, rough=0.35, metal=0.85):
     m, nt, b, co = _pm_base(name, color, rough=rough, metal=metal)
     _bump(nt, b, _noise(nt, co, 150.0, 2, 0.5), 0.05, 0.002)
@@ -1183,6 +1357,13 @@ def make_photo_materials():
         "teal":   lambda: pm_painted_wood("teal", (0.40, 0.70, 0.68)),
         "marble": lambda: pm_marble("marble"),
     }
+    for name, col in PALETTE[16:]:
+        if name.startswith("skin"):
+            specs[name] = (lambda n=name, c=col: pm_skin(n, c))
+        elif name == "tray":
+            specs[name] = (lambda n=name, c=col: pm_metal(n, c, rough=0.3, metal=0.9))
+        else:
+            specs[name] = (lambda n=name, c=col: pm_fabric(n, c, sheen=0.2, rough=0.8))
     PHOTO_MATS = [specs[name]() for name, _ in PALETTE]
     MATS["Water"] = pm_water_photo()
     MATS["Glass_Bronze"] = pm_glass_bronze("glass_bronze")
@@ -1269,12 +1450,14 @@ def _bake_res_for(mesh, base):
         return base // 2
     extent = max(max(xs) - min(xs), max(ys) - min(ys), max(zs) - min(zs))
     if extent > 60:
-        return base * 4
+        return base * 4          # deck, tower
     if extent > 20:
         return base * 2
     if extent > 6:
         return base
-    return base // 2
+    if extent > 2.5:
+        return base // 2
+    return base // 4             # small furniture, people
 
 
 def _unwrap(ob):
@@ -1673,6 +1856,7 @@ def main():
         build_cabanas()
         build_pool_furniture()
         build_deck_furniture()
+        build_people()
         tag = "stage2_full"
         if LOOK == "photo":
             build_photo_details()

@@ -2,40 +2,101 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <title>Encore Beach Club 3D map</title>
+<meta name="description" content="Interactive 3D venue map of Encore Beach Club, Las Vegas: cabanas, bungalows, lily pads, daybeds and couches by table number.">
 <style>
-  :root { --bg: #15202b; --panel: rgba(20, 28, 38, 0.86); --fg: #f1efe8; --accent: #f08a2e; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+  :root { --bg: #15202b; --panel: rgba(16, 22, 30, 0.82); --fg: #f1efe8; --accent: #f08a2e; --muted: rgba(241,239,232,0.7); }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, -apple-system, Segoe UI, sans-serif; overflow: hidden; }
   #app { position: fixed; inset: 0; }
-  canvas { display: block; }
-  #hud { position: absolute; left: 16px; top: 16px; max-width: 300px; background: var(--panel); border-radius: 10px; padding: 12px 14px; backdrop-filter: blur(6px); }
-  #hud h1 { font-size: 16px; margin: 0 0 4px; }
-  #hud p { margin: 4px 0; opacity: 0.85; }
-  #pick { margin-top: 8px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.15); min-height: 40px; }
+  canvas { display: block; touch-action: none; }
+  button { font: inherit; }
+
+  #hud { position: absolute; left: 16px; top: 16px; width: 300px; max-width: calc(100vw - 32px); background: var(--panel); border-radius: 12px; padding: 12px 14px; backdrop-filter: blur(8px); box-shadow: 0 8px 30px rgba(0,0,0,0.25); }
+  #hud h1 { font-size: 16px; margin: 0 0 2px; letter-spacing: 0.3px; }
+  #hud .sub { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
+  #find { display: flex; gap: 6px; }
+  #find input { flex: 1; min-width: 0; padding: 7px 9px; border-radius: 8px; border: 1px solid #3d4a59; background: #0f161e; color: var(--fg); }
+  #find button { padding: 7px 12px; border-radius: 8px; border: 0; background: var(--accent); color: #111; font-weight: 600; cursor: pointer; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 9px; border-radius: 8px; background: #26323f; color: var(--fg); border: 0; cursor: pointer; font-size: 12.5px; }
+  .chip.on { background: var(--accent); color: #111; font-weight: 600; }
+  .chip select { background: transparent; color: inherit; border: 0; font: inherit; }
+  .chip select option { color: #111; }
+  #pick { margin-top: 10px; padding-top: 8px; border-top: 1px solid rgba(255,255,255,0.12); min-height: 44px; }
   #pick b { color: var(--accent); font-size: 18px; }
-  #find { display: flex; gap: 6px; margin-top: 8px; }
-  #find input { flex: 1; padding: 6px 8px; border-radius: 6px; border: 1px solid #556; background: #0f161e; color: var(--fg); }
-  #find button, #hud label { padding: 6px 10px; border-radius: 6px; border: 0; background: var(--accent); color: #111; font-weight: 600; cursor: pointer; }
-  #hud label { display: inline-block; margin-top: 8px; background: #2b3a4a; color: var(--fg); font-weight: 500; }
-  #status { position: absolute; right: 16px; bottom: 16px; background: var(--panel); padding: 6px 10px; border-radius: 8px; opacity: 0.8; }
-  @media (max-width: 600px) { #hud { left: 8px; right: 8px; top: 8px; max-width: none; } }
+  #status { position: absolute; right: 16px; bottom: 16px; background: var(--panel); padding: 6px 10px; border-radius: 8px; color: var(--muted); font-size: 12.5px; }
+
+  /* 3D navigation controls */
+  #nav { position: absolute; right: 16px; top: 16px; display: grid; grid-template-columns: repeat(3, 40px); gap: 6px; }
+  #nav button { width: 40px; height: 40px; border-radius: 10px; border: 0; background: var(--panel); color: var(--fg); font-size: 18px; cursor: pointer; backdrop-filter: blur(8px); display: grid; place-items: center; }
+  #nav button:hover { background: #2b3a4a; }
+  #nav button:active { transform: scale(0.96); }
+  #nav .wide { grid-column: span 3; width: auto; font-size: 12.5px; }
+  #nav .gap { visibility: hidden; }
+
+  /* loading / intro */
+  #intro { position: absolute; inset: 0; display: grid; place-items: center; background: radial-gradient(ellipse at 50% 40%, #223447 0%, #0e1620 70%); z-index: 10; transition: opacity 1.1s ease; }
+  #intro.hide { opacity: 0; pointer-events: none; }
+  #intro .card { text-align: center; width: min(420px, 86vw); }
+  #intro h2 { font-family: Georgia, 'Times New Roman', serif; font-style: italic; font-weight: 400; font-size: 40px; margin: 0; letter-spacing: 1px; }
+  #intro h3 { font-weight: 600; letter-spacing: 6px; font-size: 14px; margin: 2px 0 26px; color: var(--muted); }
+  #bar { height: 4px; background: rgba(255,255,255,0.12); border-radius: 2px; overflow: hidden; }
+  #bar i { display: block; height: 100%; width: 0%; background: var(--accent); transition: width 0.25s ease; }
+  #intro p { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
+  #enter { margin-top: 18px; padding: 10px 22px; border-radius: 999px; border: 0; background: var(--accent); color: #111; font-weight: 700; cursor: pointer; opacity: 0; transition: opacity 0.4s; }
+  #enter.ready { opacity: 1; }
+
+  @media (max-width: 640px) {
+    #hud { left: 8px; top: 8px; width: calc(100vw - 16px - 134px); padding: 10px 12px; }
+    #hud .sub { display: none; }
+    #nav { right: 8px; top: 8px; grid-template-columns: repeat(3, 38px); }
+    #nav button { width: 38px; height: 38px; }
+    #status { right: 8px; bottom: 8px; }
+  }
 </style>
 </head>
 <body>
 <div id="app"></div>
+
 <div id="hud">
   <h1>Encore Beach Club</h1>
-  <p>Prototype map. Drag to orbit, scroll to zoom, right-drag to pan. Click a table to highlight it.</p>
-  <div id="find"><input id="q" placeholder="Table number, e.g. 401" inputmode="numeric"><button id="go">Find</button></div>
-  <label><input type="checkbox" id="roofs" checked> Show roofs</label>
-  <label>Look <select id="look"><option value="photo">Photo (baked textures)</option><option value="stylized">Stylized (96 KB)</option></select></label>
+  <p class="sub">Interactive table map. Drag to orbit, scroll or pinch to zoom, right-drag to pan. Click a table to highlight it.</p>
+  <div id="find"><input id="q" placeholder="Table number, e.g. 401" inputmode="numeric" aria-label="Table number"><button id="go">Find</button></div>
+  <div class="row">
+    <button class="chip" id="roofs" aria-pressed="true">Roofs</button>
+    <button class="chip" id="party" aria-pressed="false">Party lights</button>
+    <label class="chip">Look <select id="look"><option value="photo">Photo</option><option value="stylized">Stylized</option></select></label>
+  </div>
   <div id="pick">Nothing selected.</div>
 </div>
+
+<div id="nav" aria-label="3D controls">
+  <button id="tiltUp" title="Tilt up (W)">⤒</button>
+  <button id="zoomIn" title="Zoom in (+)">+</button>
+  <button id="rotL" title="Rotate left (A)">⟲</button>
+  <button id="tiltDown" title="Tilt down (S)">⤓</button>
+  <button id="zoomOut" title="Zoom out (−)">−</button>
+  <button id="rotR" title="Rotate right (D)">⟳</button>
+  <button class="wide" id="viewTop" title="Top-down map view (T)">Map view</button>
+  <button class="wide" id="viewReset" title="Reset view (R)">Reset view</button>
+</div>
+
 <div id="status">Loading…</div>
 
+<div id="intro">
+  <div class="card">
+    <h2>Encore</h2>
+    <h3>BEACH CLUB</h3>
+    <div id="bar"><i></i></div>
+    <p id="introMsg">Loading the venue…</p>
+    <button id="enter">Enter</button>
+  </div>
+</div>
+
 <script type="importmap">
-{ "imports": { "three": "./vendor/three.module.js" } }
+{ "imports": { "three": "./vendor/three.module.min.js" } }
 </script>
 <script type="module">
 import * as THREE from 'three';
@@ -43,32 +104,48 @@ import { GLTFLoader } from './vendor/GLTFLoader.js';
 import { DRACOLoader } from './vendor/DRACOLoader.js';
 import { OrbitControls } from './vendor/OrbitControls.js';
 import { RoomEnvironment } from './vendor/RoomEnvironment.js';
+import { EffectComposer } from './vendor/EffectComposer.js';
+import { RenderPass } from './vendor/RenderPass.js';
+import { UnrealBloomPass } from './vendor/UnrealBloomPass.js';
+import { OutputPass } from './vendor/OutputPass.js';
 
-const app = document.getElementById('app');
-const status = document.getElementById('status');
-const pick = document.getElementById('pick');
+const $ = (id) => document.getElementById(id);
+const app = $('app'), status = $('status'), pick = $('pick');
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+// ---------------------------------------------------------------- renderer / scene
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.1;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 app.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x9ec5e8);
-scene.fog = new THREE.Fog(0x9ec5e8, 250, 600);
+const DAY_SKY = new THREE.Color(0x9ec5e8), NIGHT_SKY = new THREE.Color(0x0b1424);
+scene.background = DAY_SKY.clone();
+scene.fog = new THREE.Fog(scene.background, 250, 600);
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
 scene.environmentIntensity = 0.6;
 
 // glTF is Y-up. Blender's +Y (toward the pools) becomes -Z here.
-const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.5, 2000);
-camera.position.set(-60, 55, 70);
+const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.5, 1500);
+const HOME = { pos: new THREE.Vector3(-46, 38, 52), target: new THREE.Vector3(0, 0, -14) };
+const INTRO_POS = new THREE.Vector3(-240, 230, 260);
+camera.position.copy(INTRO_POS);
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 0, -15);
-controls.maxPolarAngle = Math.PI / 2 - 0.02;
+controls.target.copy(HOME.target);
 controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance = 6;            // no clipping through furniture
+controls.maxDistance = 115;          // zoom-out lock: the venue always fills the view
+controls.maxPolarAngle = Math.PI / 2 - 0.03;
+controls.minPolarAngle = 0.05;
+controls.enablePan = true;
+controls.screenSpacePanning = false;
+controls.enabled = false;            // until the intro finishes
 
 const hemi = new THREE.HemisphereLight(0xdfeeff, 0x8a7a60, 0.8);
 scene.add(hemi);
@@ -81,98 +158,189 @@ sun.shadow.camera.right = sun.shadow.camera.top = 90;
 sun.shadow.camera.far = 400;
 sun.shadow.bias = -0.0005;
 scene.add(sun);
-renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-const ground = new THREE.Mesh(new THREE.CircleGeometry(400, 48),
-  new THREE.MeshLambertMaterial({ color: 0x7a8a7a }));
+const ground = new THREE.Mesh(new THREE.CircleGeometry(400, 48), new THREE.MeshLambertMaterial({ color: 0x7a8a7a }));
 ground.rotation.x = -Math.PI / 2;
 ground.position.y = -0.35;
 scene.add(ground);
 
+// ---------------------------------------------------------------- post-processing (bloom)
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.25, 0.6, 0.92);
+composer.addPass(bloom);
+composer.addPass(new OutputPass());
+
+// ---------------------------------------------------------------- loading
 const draco = new DRACOLoader();
 draco.setDecoderPath('./vendor/draco/');
 const loader = new GLTFLoader();
 loader.setDRACOLoader(draco);
 
-const tables = new Map();      // "401" -> Object3D
+const tables = new Map();      // "401" -> Mesh
 const roofs = [];
-let selected = null;
-let model = null;
-let water = null;
+let selected = null, model = null, water = null, gltfSun = null;
+let currentLook = 'photo';
 const waterNormal = new THREE.TextureLoader().load('./water_normal.png');
 waterNormal.wrapS = waterNormal.wrapT = THREE.RepeatWrapping;
 
-function applyLookLighting(look, gltfSun) {
-  if (look === 'photo') {
-    // Shadows and ambient occlusion are baked into the photo textures: use the GLB's own sun
-    // (direction from Blender) at low intensity for speculars only, no second set of shadows.
-    sun.visible = false;
-    hemi.intensity = 1.6;
-    scene.environmentIntensity = 0.5;
-    if (gltfSun) { gltfSun.intensity = 1.0; gltfSun.castShadow = false; }
-  } else {
-    sun.visible = true;
-    hemi.intensity = 0.8;
-    scene.environmentIntensity = 0.6;
-    if (gltfSun) gltfSun.visible = false;
-  }
+const LOOKS = { photo: './encore-beach-club-photo.glb', stylized: './encore-beach-club.glb' };
+const params = new URLSearchParams(location.search);
+let introDone = false;
+
+function setProgress(frac, msg) {
+  $('bar').firstElementChild.style.width = `${Math.round(frac * 100)}%`;
+  if (msg) $('introMsg').textContent = msg;
 }
 
-const LOOKS = { photo: './encore-beach-club-photo.glb', stylized: './encore-beach-club.glb' };
 function loadLook(look) {
+  currentLook = look;
   if (model) { scene.remove(model); model = null; }
-  tables.clear(); roofs.length = 0; select(null);
+  tables.clear(); roofs.length = 0; water = null; gltfSun = null; select(null);
   status.textContent = 'Loading…';
   loader.load(LOOKS[look], (gltf) => {
     model = gltf.scene;
     scene.add(model);
     let hasGround = false;
-    let gltfSun = null;
-    water = null;
     model.traverse((o) => {
-      if (o.isDirectionalLight) { gltfSun = o; return; }   // GLTFLoader already orients its target
+      if (o.isDirectionalLight) { gltfSun = o; return; }   // GLTFLoader orients its target already
       if (!o.isMesh) return;
       o.castShadow = true; o.receiveShadow = true;
       if (o.name.startsWith('T_')) tables.set(o.name.slice(2), o);
-      if (/Roof/.test(o.name)) { roofs.push(o); o.visible = document.getElementById('roofs').checked; }
+      if (/Roof/.test(o.name)) { roofs.push(o); o.visible = roofsOn; }
       if (o.name === 'Ground') hasGround = true;
       if (o.name === 'Pool_Water') {
         o.castShadow = false;
         if (look === 'photo') {
-          // animated ripples: tiling normal map scrolled every frame (UVs were set to 1 repeat = 6 m)
           o.material = new THREE.MeshPhysicalMaterial({
             color: 0x62c9d4, transparent: true, opacity: 0.72, roughness: 0.08, metalness: 0,
-            normalMap: waterNormal, normalScale: new THREE.Vector2(0.45, 0.45),
-            envMapIntensity: 1.2, depthWrite: false,
+            normalMap: waterNormal, normalScale: new THREE.Vector2(0.45, 0.45), envMapIntensity: 1.2, depthWrite: false,
           });
           water = o;
-        } else {
-          o.material.transparent = true; o.material.depthWrite = false;
-        }
+        } else { o.material.transparent = true; o.material.depthWrite = false; }
       }
     });
-    applyLookLighting(look, gltfSun);
     ground.visible = !hasGround;
-    status.textContent = `${tables.size} tables loaded (${look})`;
+    buildPartyLights();
+    applyLighting();
+    status.textContent = `${tables.size} tables · ${look} look`;
+    if (!introDone) {
+      setProgress(1, 'Ready');
+      $('enter').classList.add('ready');
+      if (params.has('autoplay')) startIntro();
+    }
   }, (ev) => {
-    if (ev.total) status.textContent = `Loading ${(ev.loaded / 1048576).toFixed(1)} / ${(ev.total / 1048576).toFixed(1)} MB`;
+    if (ev.total) {
+      const f = ev.loaded / ev.total;
+      status.textContent = `Loading ${(ev.loaded / 1048576).toFixed(1)} / ${(ev.total / 1048576).toFixed(1)} MB`;
+      if (!introDone) setProgress(f * 0.95, `Loading the venue… ${Math.round(f * 100)}%`);
+    }
   }, (err) => {
-    if (look === 'photo') { status.textContent = 'Photo GLB missing, falling back to stylized'; document.getElementById('look').value = 'stylized'; loadLook('stylized'); }
-    else { status.textContent = 'Failed to load GLB (serve over http, not file://)'; console.error(err); }
+    if (look === 'photo') { status.textContent = 'Photo GLB missing, falling back to stylized'; $('look').value = 'stylized'; loadLook('stylized'); }
+    else { status.textContent = 'Failed to load GLB (serve over http, not file://)'; setProgress(0, 'Could not load the model.'); console.error(err); }
   });
 }
-const params = new URLSearchParams(location.search);
-const initialLook = LOOKS[params.get('look')] ? params.get('look') : 'photo';
-document.getElementById('look').value = initialLook;
-document.getElementById('look').onchange = (e) => loadLook(e.target.value);
-loadLook(initialLook);
 
+// ---------------------------------------------------------------- intro transition
+function startIntro() {
+  if (introDone) return;
+  introDone = true;
+  $('intro').classList.add('hide');
+  // fly in from high above the Strip to the home view
+  flight = { from: camera.position.clone(), to: HOME.pos.clone(), tFrom: controls.target.clone(), tTo: HOME.target.clone(), t: 0, dur: 3.2, onDone: () => { controls.enabled = true; } };
+}
+$('enter').onclick = startIntro;
+$('intro').addEventListener('click', (e) => { if ($('enter').classList.contains('ready') && e.target.id !== 'enter') startIntro(); });
+
+let flight = null;
+const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+function flyTo(pos, target, dur = 1.2) {
+  flight = { from: camera.position.clone(), to: pos.clone(), tFrom: controls.target.clone(), tTo: target.clone(), t: 0, dur, onDone: null };
+}
+
+// ---------------------------------------------------------------- lighting modes
+let partyOn = false, roofsOn = true;
+const partyLights = [];
+let partyGroup = null;
+
+function buildPartyLights() {
+  if (partyGroup) { scene.remove(partyGroup); partyGroup = null; partyLights.length = 0; }
+  partyGroup = new THREE.Group();
+  // Blender (x, y, z) -> three (x, z, -y). Stage truss is at Blender (0, -1, 8.3) -> (0, 8.3, 1).
+  const colors = [0xff2fa0, 0x2fd0ff, 0xffd02f, 0x8f3fff, 0x2fff8f, 0xff6a2f];
+  const coneGeo = new THREE.ConeGeometry(1, 1, 24, 1, true);
+  coneGeo.translate(0, -0.5, 0);           // apex at origin, opening downward along -Y
+  for (let i = 0; i < 6; i++) {
+    const x = -5 + i * 2;
+    const spot = new THREE.SpotLight(colors[i], 0, 60, 0.28, 0.5, 1.2);
+    spot.position.set(x, 8.2, 1.0);
+    spot.target.position.set(x * 2, 0, -14);
+    partyGroup.add(spot, spot.target);
+    const cone = new THREE.Mesh(coneGeo, new THREE.MeshBasicMaterial({ color: colors[i], transparent: true, opacity: 0.0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+    cone.position.copy(spot.position);
+    partyGroup.add(cone);
+    partyLights.push({ spot, cone, phase: i * 1.1, color: colors[i] });
+  }
+  // LED strips: stage edge, long bar, pool rim glow
+  const strip = (w, h, d, pos, color) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0 }));
+    m.position.copy(pos); partyGroup.add(m); partyLights.push({ strip: m, color }); return m;
+  };
+  strip(11, 0.08, 0.08, new THREE.Vector3(0, 1.22, -1.0), 0xff3fb0);          // stage front edge
+  strip(0.08, 0.08, 22, new THREE.Vector3(6.0, 1.12, 17.2), 0x3fd0ff);         // backstage long bar
+  strip(19.5, 0.08, 0.08, new THREE.Vector3(0, 1.12, -45.8), 0xffd04f);        // gaming bar
+  // pool underwater glow
+  for (const [x, z, dist] of [[-17, -24, 30], [17, -24, 30], [0, -23, 24]]) {
+    const pl = new THREE.PointLight(0x4fe0ff, 0, dist, 1.5);
+    pl.position.set(x, -0.5, z);
+    partyGroup.add(pl);
+    partyLights.push({ point: pl });
+  }
+  scene.add(partyGroup);
+}
+
+function applyLighting() {
+  const photo = currentLook === 'photo';
+  if (partyOn) {
+    // dusk: dim sky and sun, let the stage lights and bloom carry the scene
+    scene.background.copy(NIGHT_SKY); scene.fog.color.copy(NIGHT_SKY);
+    hemi.intensity = photo ? 0.55 : 0.35; hemi.color.set(0x5570a0); hemi.groundColor.set(0x1a1a24);
+    sun.visible = !photo; sun.intensity = 0.25; sun.color.set(0x9fb0ff);
+    if (gltfSun) { gltfSun.visible = photo; gltfSun.intensity = 0.3; gltfSun.castShadow = false; }
+    scene.environmentIntensity = 0.15;
+    renderer.toneMappingExposure = 1.0;
+    bloom.strength = 0.9; bloom.threshold = 0.55; bloom.radius = 0.7;
+    partyLights.forEach((l) => {
+      if (l.spot) l.spot.intensity = 900;
+      if (l.cone) l.cone.material.opacity = 0.11;
+      if (l.strip) l.strip.material.opacity = 1;
+      if (l.point) l.point.intensity = 120;
+    });
+    if (water) water.material.color.set(0x2a9fb8);
+  } else {
+    scene.background.copy(DAY_SKY); scene.fog.color.copy(DAY_SKY);
+    hemi.color.set(0xdfeeff); hemi.groundColor.set(0x8a7a60);
+    hemi.intensity = photo ? 1.6 : 0.8;
+    sun.visible = !photo; sun.intensity = 2.2; sun.color.set(0xfff2dc);
+    if (gltfSun) { gltfSun.visible = photo; gltfSun.intensity = 1.0; gltfSun.castShadow = false; }
+    scene.environmentIntensity = photo ? 0.5 : 0.6;
+    renderer.toneMappingExposure = 1.1;
+    bloom.strength = 0.22; bloom.threshold = 0.92; bloom.radius = 0.5;
+    partyLights.forEach((l) => {
+      if (l.spot) l.spot.intensity = 0;
+      if (l.cone) l.cone.material.opacity = 0;
+      if (l.strip) l.strip.material.opacity = 0;
+      if (l.point) l.point.intensity = 0;
+    });
+    if (water) water.material.color.set(0x62c9d4);
+  }
+}
+
+// ---------------------------------------------------------------- selection
 function describe(o) {
   const d = o.userData || {};
   return `<b>Table ${d.number ?? o.name.slice(2)}</b><br>${(d.type || '').replace(/_/g, ' ')}<br><span style="opacity:.7">${d.zone || ''}</span>`;
 }
-
 function select(o) {
   if (selected) { if (selected.userData._mat) selected.material = selected.userData._mat; selected = null; }
   if (!o) { pick.textContent = 'Nothing selected.'; return; }
@@ -183,47 +351,112 @@ function select(o) {
   selected = o;
   pick.innerHTML = describe(o);
 }
-
 const ray = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 let downAt = null;
 renderer.domElement.addEventListener('pointerdown', (e) => { downAt = [e.clientX, e.clientY]; });
 renderer.domElement.addEventListener('pointerup', (e) => {
-  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
+  if (!introDone || !downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
   ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(ndc, camera);
   const hit = ray.intersectObjects([...tables.values()], false)[0];
   select(hit ? hit.object : null);
 });
-
-function flyTo(o) {
+function focusTable(o) {
   const box = new THREE.Box3().setFromObject(o);
   const c = box.getCenter(new THREE.Vector3());
   const d = Math.max(10, box.getSize(new THREE.Vector3()).length() * 2.2);
-  controls.target.copy(c);
-  camera.position.set(c.x - d * 0.5, c.y + d * 0.65, c.z + d * 0.7);
+  flyTo(new THREE.Vector3(c.x - d * 0.5, c.y + d * 0.65, c.z + d * 0.7), c, 1.4);
 }
-document.getElementById('go').onclick = () => {
-  const q = document.getElementById('q').value.trim().toUpperCase();
+$('go').onclick = () => {
+  const q = $('q').value.trim().toUpperCase();
   const o = tables.get(q);
-  if (o) { select(o); flyTo(o); } else { pick.textContent = `No table "${q}".`; }
+  if (o) { select(o); focusTable(o); } else { pick.textContent = `No table "${q}".`; }
 };
-document.getElementById('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') document.getElementById('go').click(); });
-document.getElementById('roofs').onchange = (e) => roofs.forEach((r) => (r.visible = e.target.checked));
+$('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('go').click(); });
+
+// ---------------------------------------------------------------- UI: toggles and 3D controls
+$('roofs').onclick = () => { roofsOn = !roofsOn; $('roofs').classList.toggle('on', !roofsOn); $('roofs').setAttribute('aria-pressed', roofsOn); roofs.forEach((r) => (r.visible = roofsOn)); };
+$('party').onclick = () => { partyOn = !partyOn; $('party').classList.toggle('on', partyOn); $('party').setAttribute('aria-pressed', partyOn); applyLighting(); };
+const initialLook = LOOKS[params.get('look')] ? params.get('look') : 'photo';
+$('look').value = initialLook;
+$('look').onchange = (e) => loadLook(e.target.value);
+
+const sph = new THREE.Spherical();
+function orbitStep(dTheta, dPhi, zoom) {
+  const off = camera.position.clone().sub(controls.target);
+  sph.setFromVector3(off);
+  sph.theta += dTheta;
+  sph.phi = THREE.MathUtils.clamp(sph.phi + dPhi, controls.minPolarAngle, controls.maxPolarAngle);
+  sph.radius = THREE.MathUtils.clamp(sph.radius * zoom, controls.minDistance, controls.maxDistance);
+  flyTo(controls.target.clone().add(off.setFromSpherical(sph)), controls.target, 0.45);
+}
+$('zoomIn').onclick = () => orbitStep(0, 0, 0.7);
+$('zoomOut').onclick = () => orbitStep(0, 0, 1 / 0.7);
+$('rotL').onclick = () => orbitStep(-Math.PI / 8, 0, 1);
+$('rotR').onclick = () => orbitStep(Math.PI / 8, 0, 1);
+$('tiltUp').onclick = () => orbitStep(0, -Math.PI / 12, 1);
+$('tiltDown').onclick = () => orbitStep(0, Math.PI / 12, 1);
+$('viewTop').onclick = () => flyTo(new THREE.Vector3(0, 138, -5.5), new THREE.Vector3(0, 0, -14), 1.4);
+$('viewReset').onclick = () => flyTo(HOME.pos, HOME.target, 1.4);
+addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' || !introDone) return;
+  const k = e.key.toLowerCase();
+  if (k === '+' || k === '=') $('zoomIn').click();
+  else if (k === '-' || k === '_') $('zoomOut').click();
+  else if (k === 'a') $('rotL').click();
+  else if (k === 'd') $('rotR').click();
+  else if (k === 'w') $('tiltUp').click();
+  else if (k === 's') $('tiltDown').click();
+  else if (k === 't') $('viewTop').click();
+  else if (k === 'r') $('viewReset').click();
+  else if (k === 'p') $('party').click();
+});
 
 addEventListener('resize', () => {
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
 });
 
+// ---------------------------------------------------------------- frame loop
 const clock = new THREE.Clock();
+const tmpV = new THREE.Vector3();
 renderer.setAnimationLoop(() => {
-  const t = clock.getElapsedTime();
-  if (water) { waterNormal.offset.set(t * 0.012, t * 0.008); }
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+  if (flight) {
+    flight.t += dt;
+    const k = easeInOut(Math.min(1, flight.t / flight.dur));
+    camera.position.lerpVectors(flight.from, flight.to, k);
+    controls.target.lerpVectors(flight.tFrom, flight.tTo, k);
+    if (flight.t >= flight.dur) { const f = flight; flight = null; f.onDone && f.onDone(); }
+  } else if (!introDone) {
+    // slow drift while the intro screen is up
+    camera.position.set(INTRO_POS.x * Math.cos(t * 0.05) - INTRO_POS.z * Math.sin(t * 0.05), INTRO_POS.y, INTRO_POS.x * Math.sin(t * 0.05) + INTRO_POS.z * Math.cos(t * 0.05));
+    camera.lookAt(controls.target);
+  }
+  if (water) waterNormal.offset.set(t * 0.012, t * 0.008);
+  if (partyOn) {
+    partyLights.forEach((l, i) => {
+      if (!l.spot) return;
+      const a = t * 0.9 + l.phase;
+      l.spot.target.position.set(Math.sin(a) * 9 + (i - 2.5) * 2.5, 0, -9 + Math.cos(a * 0.7) * 6);
+      l.spot.intensity = 700 + 300 * Math.sin(t * 3 + l.phase);
+      // aim the visible cone at the target
+      tmpV.copy(l.spot.target.position).sub(l.spot.position);
+      const len = tmpV.length();
+      l.cone.scale.set(len * 0.3, len, len * 0.3);
+      l.cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), tmpV.normalize());
+      l.cone.material.opacity = 0.07 + 0.05 * Math.sin(t * 3 + l.phase);
+    });
+  }
   controls.update();
-  renderer.render(scene, camera);
+  composer.render();
 });
+
+loadLook(initialLook);
 </script>
 </body>
 </html>

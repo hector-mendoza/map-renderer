@@ -1,0 +1,8 @@
+bake/
+renders/
+refs/
+*.blend
+*.blend1
+*.py
+*.md
+palette.png
