@@ -114,6 +114,7 @@ import { UnrealBloomPass } from './vendor/UnrealBloomPass.js';
 import { OutputPass } from './vendor/OutputPass.js';
 
 const $ = (id) => document.getElementById(id);
+const clock = new THREE.Clock();
 const app = $('app'), status = $('status'), pick = $('pick');
 
 // ---------------------------------------------------------------- renderer / scene
@@ -251,7 +252,7 @@ function startIntro() {
   introDone = true;
   $('intro').classList.add('hide');
   // fly in from high above the Strip to the home view
-  flight = { from: camera.position.clone(), to: HOME.pos.clone(), tFrom: controls.target.clone(), tTo: HOME.target.clone(), t: 0, dur: 3.2, onDone: () => { controls.enabled = true; } };
+  flight = { from: camera.position.clone(), to: HOME.pos.clone(), tFrom: controls.target.clone(), tTo: HOME.target.clone(), start: clock.elapsedTime, dur: 3.2, onDone: () => { controls.enabled = true; } };
 }
 $('enter').onclick = startIntro;
 $('intro').addEventListener('click', (e) => { if ($('enter').classList.contains('ready') && e.target.id !== 'enter') startIntro(); });
@@ -259,7 +260,7 @@ $('intro').addEventListener('click', (e) => { if ($('enter').classList.contains(
 let flight = null;
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 function flyTo(pos, target, dur = 1.2) {
-  flight = { from: camera.position.clone(), to: pos.clone(), tFrom: controls.target.clone(), tTo: target.clone(), t: 0, dur, onDone: null };
+  flight = { from: camera.position.clone(), to: pos.clone(), tFrom: controls.target.clone(), tTo: target.clone(), start: clock.elapsedTime, dur, onDone: null };
 }
 
 // ---------------------------------------------------------------- lighting modes
@@ -313,12 +314,12 @@ function applyLighting() {
     if (gltfSun) { gltfSun.visible = photo; gltfSun.intensity = 0.3; gltfSun.castShadow = false; }
     scene.environmentIntensity = 0.15;
     renderer.toneMappingExposure = 1.0;
-    bloom.strength = 0.9; bloom.threshold = 0.55; bloom.radius = 0.7;
+    bloom.strength = 0.55; bloom.threshold = 0.8; bloom.radius = 0.6;
     partyLights.forEach((l) => {
-      if (l.spot) l.spot.intensity = 900;
-      if (l.cone) l.cone.material.opacity = 0.11;
+      if (l.spot) l.spot.intensity = 260;
+      if (l.cone) l.cone.material.opacity = 0.05;
       if (l.strip) l.strip.material.opacity = 1;
-      if (l.point) l.point.intensity = 120;
+      if (l.point) l.point.intensity = 10;
     });
     if (water) water.material.color.set(0x2a9fb8);
   } else {
@@ -351,7 +352,7 @@ function select(o) {
   o.userData._mat = o.material;
   o.material = o.material.clone();
   o.material.emissive = new THREE.Color(0xf08a2e);
-  o.material.emissiveIntensity = 0.9;
+  o.material.emissiveIntensity = 0.55;
   selected = o;
   pick.innerHTML = describe(o);
 }
@@ -425,17 +426,17 @@ addEventListener('resize', () => {
 });
 
 // ---------------------------------------------------------------- frame loop
-const clock = new THREE.Clock();
 const tmpV = new THREE.Vector3();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   const t = clock.elapsedTime;
   if (flight) {
-    flight.t += dt;
-    const k = easeInOut(Math.min(1, flight.t / flight.dur));
+    const u = Math.min(1, (t - flight.start) / flight.dur);     // wall-clock, frame-rate independent
+    const k = easeInOut(u);
     camera.position.lerpVectors(flight.from, flight.to, k);
     controls.target.lerpVectors(flight.tFrom, flight.tTo, k);
-    if (flight.t >= flight.dur) { const f = flight; flight = null; f.onDone && f.onDone(); }
+    camera.lookAt(controls.target);
+    if (u >= 1) { const f = flight; flight = null; f.onDone && f.onDone(); }
   } else if (!introDone) {
     // slow drift while the intro screen is up
     camera.position.set(INTRO_POS.x * Math.cos(t * 0.05) - INTRO_POS.z * Math.sin(t * 0.05), INTRO_POS.y, INTRO_POS.x * Math.sin(t * 0.05) + INTRO_POS.z * Math.cos(t * 0.05));
@@ -447,19 +448,20 @@ renderer.setAnimationLoop(() => {
       if (!l.spot) return;
       const a = t * 0.9 + l.phase;
       l.spot.target.position.set(Math.sin(a) * 9 + (i - 2.5) * 2.5, 0, -9 + Math.cos(a * 0.7) * 6);
-      l.spot.intensity = 700 + 300 * Math.sin(t * 3 + l.phase);
+      l.spot.intensity = 220 + 90 * Math.sin(t * 3 + l.phase);
       // aim the visible cone at the target
       tmpV.copy(l.spot.target.position).sub(l.spot.position);
       const len = tmpV.length();
       l.cone.scale.set(len * 0.3, len, len * 0.3);
       l.cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), tmpV.normalize());
-      l.cone.material.opacity = 0.07 + 0.05 * Math.sin(t * 3 + l.phase);
+      l.cone.material.opacity = 0.035 + 0.02 * Math.sin(t * 3 + l.phase);
     });
   }
-  controls.update();
+  if (!flight && introDone) controls.update();   // OrbitControls would clamp the camera mid-flight
   composer.render();
 });
 
+window.__v = { camera, controls, tables, get flight() { return flight; } };
 loadLook(initialLook);
 </script>
 </body>

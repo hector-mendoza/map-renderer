@@ -43,19 +43,19 @@ Web viewer with the baked photo GLB (lighting, shadows and ambient occlusion bak
 | Stage | Output | Size |
 | --- | --- | --- |
 | 1 blockout | `renders/encore-blockout.glb` (Draco) | 63 KB |
-| 2 full | `renders/encore-beach-club-uncompressed.glb` (no Draco) | 265 KB |
-| 2 full | **`encore-beach-club.glb` (Draco + WebP), the deliverable** | **96 KB** |
+| 2 full | `renders/encore-beach-club-uncompressed.glb` (no Draco) | 792 KB |
+| 2 full | **`encore-beach-club.glb` (Draco + WebP), stylized web asset** | **220 KB** |
 | 2 full | `encore-beach-club.blend` | 154 KB |
 | photo | `encore-beach-club-photo.blend` (procedural materials) | ~360 KB |
-| photo, baked | `encore-beach-club-photo.glb` straight from Blender (153 PNG textures incl. lighting, no Draco) | 204 MB |
-| photo, baked | **`encore-beach-club-photo.glb` after `gltf-transform webp --quality 85` + `draco`** | **11.8 MB** |
+| photo, baked | `encore-beach-club-photo.glb` straight from Blender (216 PNG textures incl. lighting, no Draco) | 61 MB |
+| photo, baked | **`encore-beach-club-photo.glb` after `gltf-transform webp --quality 80` + `draco`** | **3.7 MB** |
 
 Budget was 10 MB (stretch 5 MB, mobile first-load 8 MB). The final GLB is about 1% of the budget.
 The viewer page itself is dominated by the vendored Three.js build (about 2.2 MB, cacheable), not
 by the model.
 
-Scene statistics (stage 2): 247 objects, 185 table objects, 47 unique meshes, 14.6k triangles
-(budget 150k). Two materials in total: `Atlas` (one 64 px palette texture, flat colours) and
+Scene statistics (stage 2): 402 objects, 185 table objects, 68 unique meshes, 91k triangles
+(budget 150k; the detailed palms and 156 people account for most of it). Two materials in total: `Atlas` (one 64 px palette texture, flat colours) and
 `Water` (alpha blended).
 
 ## Conventions in the GLB
@@ -81,7 +81,7 @@ blender -b --python build_encore.py -- --stage full                 # stylized +
 blender -b --python build_encore.py -- --stage full --look photo --samples 64
 blender -b --python build_encore.py -- --look photo --bake --no-render      # textured GLB (~30 min)
 npx @gltf-transform/cli webp encore-beach-club-photo.glb tmp.glb --quality 85 && \
-npx @gltf-transform/cli draco tmp.glb encore-beach-club-photo.glb                # 204 MB -> 11.8 MB
+npx @gltf-transform/cli draco tmp.glb encore-beach-club-photo.glb                # 61 MB -> 3.7 MB
 blender -b --python build_encore.py -- --look photo --cameras eyelevel --samples 16   # quick check
 # or, with the pip wheel (python 3.11):  pip install bpy
 python build_encore.py -- --stage full [--samples 48] [--no-render] [--out DIR]
@@ -117,7 +117,7 @@ python -m http.server 8000     # then open http://localhost:8000/index.html
   generated tileable ripple normal map that the viewer scrolls for animated water.
 - Ubuntu's Blender build has no Draco encoder and the exporter writes PNGs, so the raw photo
   GLB is 174 MB. The committed file was post-processed with
-  `gltf-transform webp --quality 85` and `gltf-transform draco`, which brings it to 11.8 MB.
+  `gltf-transform webp --quality 80` and `gltf-transform draco`, which brings it to 3.7 MB.
 - Water uses a refractive Principled surface that is transparent to shadow rays (Light Path
   node), so sunlight reaches the turquoise plaster basin without refractive caustics.
 - The Encore tower, casino block and surrounding ground are rough placeholders for context only;
