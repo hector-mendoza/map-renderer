@@ -71,7 +71,7 @@
   <div class="row">
     <button class="chip" id="roofs" aria-pressed="true">Roofs</button>
     <button class="chip" id="party" aria-pressed="false">Party lights</button>
-    <label class="chip">Look <select id="look"><option value="photo">Photo</option><option value="stylized">Stylized</option></select></label>
+    <label class="chip">Look <select id="look"><option value="detailed">Detailed</option><option value="photo">Photo (baked)</option><option value="stylized">Stylized</option></select></label>
   </div>
   <div id="pick">Nothing selected.</div>
 </div>
@@ -137,8 +137,9 @@ scene.environmentIntensity = 0.6;
 
 // glTF is Y-up. Blender's +Y (toward the pools) becomes -Z here.
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.5, 1500);
-const HOME = { pos: new THREE.Vector3(-46, 38, 52), target: new THREE.Vector3(0, 0, -14) };
+const HOME = { pos: new THREE.Vector3(-46, 38, 52), target: new THREE.Vector3(0, 0, -14) };   // updated per look
 const INTRO_POS = new THREE.Vector3(-240, 230, 260);
+let topView = { pos: new THREE.Vector3(0, 138, -5.5), target: new THREE.Vector3(0, 0, -14) };
 camera.position.copy(INTRO_POS);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.copy(HOME.target);
@@ -189,7 +190,8 @@ let currentLook = 'photo';
 const waterNormal = new THREE.TextureLoader().load('./water_normal.png');
 waterNormal.wrapS = waterNormal.wrapT = THREE.RepeatWrapping;
 
-const LOOKS = { photo: './encore-beach-club-photo.glb', stylized: './encore-beach-club.glb' };
+const LOOKS = { detailed: './encore-beach-club-detailed.glb', photo: './encore-beach-club-photo.glb', stylized: './encore-beach-club.glb' };
+const FALLBACK = { detailed: 'photo', photo: 'stylized' };
 const params = new URLSearchParams(location.search);
 let introDone = false;
 
@@ -207,13 +209,22 @@ function loadLook(look) {
     model = gltf.scene;
     scene.add(model);
     let hasGround = false;
+    const anchors = { stage: [], floor: [], pools: [], venue: [] };
     model.traverse((o) => {
       if (o.isDirectionalLight) { gltfSun = o; return; }   // GLTFLoader orients its target already
+      const d = o.userData || {};
+      // table nodes: either my T_<n> meshes, or nodes carrying table_id extras (a Group when the
+      // node has several primitives, a Mesh when it has one)
+      if (o.name.startsWith('T_') && o.isMesh) tables.set(o.name.slice(2), o);
+      else if (d.table_id != null && d.selectable !== 0) { const id = String(d.table_id).toUpperCase(); if (!tables.has(id)) tables.set(id, o); }
       if (!o.isMesh) return;
       o.castShadow = true; o.receiveShadow = true;
-      if (o.name.startsWith('T_')) tables.set(o.name.slice(2), o);
-      if (/Roof/.test(o.name)) { roofs.push(o); o.visible = roofsOn; }
-      if (o.name === 'Ground') hasGround = true;
+      if (/Roof/.test(o.name) || d.layer === 'Roofs') { roofs.push(o); o.visible = roofsOn; }
+      if (o.name === 'Ground' || o.name.startsWith('Ground_')) hasGround = true;
+      if (/^StageTable_/.test(o.name) || o.name === 'Stage') anchors.stage.push(o);
+      if (/^DanceFloorSection_/.test(o.name) || /^T_3[0-6]$/.test(o.name)) anchors.floor.push(o);
+      if (/^(LilyPad|CenterPoolLilyPad)_/.test(o.name)) anchors.pools.push(o);
+      if (['Tables_Outdoor', 'Tables_Nightclub', 'Pools', 'Site', 'Roofs'].includes(d.layer)) anchors.venue.push(o);
       if (o.name === 'Pool_Water') {
         o.castShadow = false;
         if (look === 'photo') {
@@ -226,7 +237,8 @@ function loadLook(look) {
       }
     });
     ground.visible = !hasGround;
-    buildPartyLights();
+    frameLook(look, anchors);
+    buildPartyLights(look, anchors);
     applyLighting();
     status.textContent = `${tables.size} tables · ${look} look`;
     if (!introDone) {
@@ -241,9 +253,35 @@ function loadLook(look) {
       if (!introDone) setProgress(f * 0.95, `Loading the venue… ${Math.round(f * 100)}%`);
     }
   }, (err) => {
-    if (look === 'photo') { status.textContent = 'Photo GLB missing, falling back to stylized'; $('look').value = 'stylized'; loadLook('stylized'); }
+    if (FALLBACK[look]) { status.textContent = `${look} GLB missing, falling back to ${FALLBACK[look]}`; $('look').value = FALLBACK[look]; loadLook(FALLBACK[look]); }
     else { status.textContent = 'Failed to load GLB (serve over http, not file://)'; setProgress(0, 'Could not load the model.'); console.error(err); }
   });
+}
+
+// ---------------------------------------------------------------- framing per look
+const centerOf = (objs) => { const b = new THREE.Box3(); objs.forEach((o) => b.expandByObject(o)); return b.isEmpty() ? null : { c: b.getCenter(new THREE.Vector3()), b }; };
+function frameLook(look, anchors) {
+  if (look !== 'detailed') {
+    HOME.pos.set(-46, 38, 52); HOME.target.set(0, 0, -14);
+    topView = { pos: new THREE.Vector3(0, 138, -5.5), target: new THREE.Vector3(0, 0, -14) };
+    controls.minDistance = 6; controls.maxDistance = 115;
+    sun.shadow.camera.left = sun.shadow.camera.bottom = -90; sun.shadow.camera.right = sun.shadow.camera.top = 90;
+    sun.position.set(-60, 90, 40);
+  } else {
+    // external model: frame from the venue layers only (the context ground and road are much larger)
+    const v = centerOf(anchors.venue.length ? anchors.venue : [model]);
+    const size = v.b.getSize(new THREE.Vector3());
+    const diag = Math.hypot(size.x, size.z);
+    HOME.target.set(v.c.x, v.b.min.y + 0.5, v.c.z);
+    HOME.pos.copy(HOME.target).add(new THREE.Vector3(-0.42, 0.40, 0.55).multiplyScalar(diag * 0.95));
+    topView = { pos: HOME.target.clone().add(new THREE.Vector3(0, diag * 1.05, diag * 0.06)), target: HOME.target.clone() };
+    controls.minDistance = 4; controls.maxDistance = diag * 1.25;
+    const r = diag * 0.7;
+    sun.shadow.camera.left = sun.shadow.camera.bottom = -r; sun.shadow.camera.right = sun.shadow.camera.top = r;
+    sun.position.copy(HOME.target).add(new THREE.Vector3(-0.5, 0.8, 0.35).multiplyScalar(diag));
+  }
+  sun.shadow.camera.updateProjectionMatrix();
+  if (introDone && !flight) flyTo(HOME.pos, HOME.target, 1.4);
 }
 
 // ---------------------------------------------------------------- intro transition
@@ -252,6 +290,7 @@ function startIntro() {
   introDone = true;
   $('intro').classList.add('hide');
   // fly in from high above the Strip to the home view
+  camera.position.copy(HOME.target).add(camera.position.clone().sub(HOME.target).normalize().multiplyScalar(HOME.pos.distanceTo(HOME.target) * 4.5));
   flight = { from: camera.position.clone(), to: HOME.pos.clone(), tFrom: controls.target.clone(), tTo: HOME.target.clone(), start: clock.elapsedTime, dur: 3.2, onDone: () => { controls.enabled = true; } };
 }
 $('enter').onclick = startIntro;
@@ -268,18 +307,29 @@ let partyOn = false, roofsOn = true;
 const partyLights = [];
 let partyGroup = null;
 
-function buildPartyLights() {
+let rig = { stage: new THREE.Vector3(0, 8.2, 1.0), floor: new THREE.Vector3(0, 0, -9), strips: true, pools: [[-17, -24, 30], [17, -24, 30], [0, -23, 24]] };
+function buildPartyLights(look, anchors) {
   if (partyGroup) { scene.remove(partyGroup); partyGroup = null; partyLights.length = 0; }
   partyGroup = new THREE.Group();
-  // Blender (x, y, z) -> three (x, z, -y). Stage truss is at Blender (0, -1, 8.3) -> (0, 8.3, 1).
+  if (look === 'detailed') {
+    const st = centerOf(anchors.stage), fl = centerOf(anchors.floor);
+    const stage = st ? st.c.clone() : HOME.target.clone();
+    const floor = fl ? fl.c.clone() : stage.clone();
+    stage.y = floor.y + 7.5;
+    rig = { stage, floor: new THREE.Vector3(floor.x, fl ? fl.b.min.y : floor.y, floor.z), strips: false, pools: [] };
+    const left = anchors.pools.filter((o) => o.position.x < HOME.target.x), right = anchors.pools.filter((o) => o.position.x >= HOME.target.x);
+    for (const grp of [left, right]) { const c = centerOf(grp); if (c) rig.pools.push([c.c.x, c.c.z, 26]); }
+  } else {
+    rig = { stage: new THREE.Vector3(0, 8.2, 1.0), floor: new THREE.Vector3(0, 0, -9), strips: true, pools: [[-17, -24, 30], [17, -24, 30], [0, -23, 24]] };
+  }
   const colors = [0xff2fa0, 0x2fd0ff, 0xffd02f, 0x8f3fff, 0x2fff8f, 0xff6a2f];
   const coneGeo = new THREE.ConeGeometry(1, 1, 24, 1, true);
   coneGeo.translate(0, -0.5, 0);           // apex at origin, opening downward along -Y
   for (let i = 0; i < 6; i++) {
     const x = -5 + i * 2;
     const spot = new THREE.SpotLight(colors[i], 0, 60, 0.28, 0.5, 1.2);
-    spot.position.set(x, 8.2, 1.0);
-    spot.target.position.set(x * 2, 0, -14);
+    spot.position.set(rig.stage.x + x, rig.stage.y, rig.stage.z);
+    spot.target.position.set(rig.floor.x + x * 2, rig.floor.y, rig.floor.z);
     partyGroup.add(spot, spot.target);
     const cone = new THREE.Mesh(coneGeo, new THREE.MeshBasicMaterial({ color: colors[i], transparent: true, opacity: 0.0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
     cone.position.copy(spot.position);
@@ -291,13 +341,15 @@ function buildPartyLights() {
     const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0 }));
     m.position.copy(pos); partyGroup.add(m); partyLights.push({ strip: m, color }); return m;
   };
-  strip(11, 0.08, 0.08, new THREE.Vector3(0, 1.22, -1.0), 0xff3fb0);          // stage front edge
-  strip(0.08, 0.08, 22, new THREE.Vector3(6.0, 1.12, 17.2), 0x3fd0ff);         // backstage long bar
-  strip(19.5, 0.08, 0.08, new THREE.Vector3(0, 1.12, -45.8), 0xffd04f);        // gaming bar
+  if (rig.strips) {
+    strip(11, 0.08, 0.08, new THREE.Vector3(0, 1.22, -1.0), 0xff3fb0);          // stage front edge
+    strip(0.08, 0.08, 22, new THREE.Vector3(6.0, 1.12, 17.2), 0x3fd0ff);         // backstage long bar
+    strip(19.5, 0.08, 0.08, new THREE.Vector3(0, 1.12, -45.8), 0xffd04f);        // gaming bar
+  }
   // pool underwater glow
-  for (const [x, z, dist] of [[-17, -24, 30], [17, -24, 30], [0, -23, 24]]) {
+  for (const [x, z, dist] of rig.pools) {
     const pl = new THREE.PointLight(0x4fe0ff, 0, dist, 1.5);
-    pl.position.set(x, -0.5, z);
+    pl.position.set(x, rig.floor.y - 0.3, z);
     partyGroup.add(pl);
     partyLights.push({ point: pl });
   }
@@ -306,6 +358,7 @@ function buildPartyLights() {
 
 function applyLighting() {
   const photo = currentLook === 'photo';
+  renderer.toneMappingExposure = currentLook === 'detailed' ? 1.0 : 1.1;
   if (partyOn) {
     // dusk: dim sky and sun, let the stage lights and bloom carry the scene
     scene.background.copy(NIGHT_SKY); scene.fog.color.copy(NIGHT_SKY);
@@ -313,7 +366,7 @@ function applyLighting() {
     sun.visible = !photo; sun.intensity = 0.25; sun.color.set(0x9fb0ff);
     if (gltfSun) { gltfSun.visible = photo; gltfSun.intensity = 0.3; gltfSun.castShadow = false; }
     scene.environmentIntensity = 0.15;
-    renderer.toneMappingExposure = 1.0;
+    renderer.toneMappingExposure = 0.95;
     bloom.strength = 0.55; bloom.threshold = 0.8; bloom.radius = 0.6;
     partyLights.forEach((l) => {
       if (l.spot) l.spot.intensity = 260;
@@ -326,10 +379,9 @@ function applyLighting() {
     scene.background.copy(DAY_SKY); scene.fog.color.copy(DAY_SKY);
     hemi.color.set(0xdfeeff); hemi.groundColor.set(0x8a7a60);
     hemi.intensity = photo ? 1.6 : 0.8;
-    sun.visible = !photo; sun.intensity = 2.2; sun.color.set(0xfff2dc);
+    sun.visible = !photo; sun.intensity = currentLook === 'detailed' ? 2.6 : 2.2; sun.color.set(0xfff2dc);
     if (gltfSun) { gltfSun.visible = photo; gltfSun.intensity = 1.0; gltfSun.castShadow = false; }
     scene.environmentIntensity = photo ? 0.5 : 0.6;
-    renderer.toneMappingExposure = 1.1;
     bloom.strength = 0.22; bloom.threshold = 0.92; bloom.radius = 0.5;
     partyLights.forEach((l) => {
       if (l.spot) l.spot.intensity = 0;
@@ -344,15 +396,20 @@ function applyLighting() {
 // ---------------------------------------------------------------- selection
 function describe(o) {
   const d = o.userData || {};
-  return `<b>Table ${d.number ?? o.name.slice(2)}</b><br>${(d.type || '').replace(/_/g, ' ')}<br><span style="opacity:.7">${d.zone || ''}</span>`;
+  const num = d.table_id ?? d.number ?? o.name.replace(/^T_/, '');
+  const kind = d.category || (d.type || '').replace(/_/g, ' ');
+  const zone = d.section || d.zone || '';
+  return `<b>Table ${num}</b><br>${kind}<br><span style="opacity:.7">${zone}</span>`;
 }
+function meshesOf(o) { const out = []; o.traverse((m) => { if (m.isMesh) out.push(m); }); return out; }
 function select(o) {
-  if (selected) { if (selected.userData._mat) selected.material = selected.userData._mat; selected = null; }
+  if (selected) {
+    meshesOf(selected).forEach((m) => { if (m.userData._mat) { m.material = m.userData._mat; delete m.userData._mat; } });
+    selected = null;
+  }
   if (!o) { pick.textContent = 'Nothing selected.'; return; }
-  o.userData._mat = o.material;
-  o.material = o.material.clone();
-  o.material.emissive = new THREE.Color(0xf08a2e);
-  o.material.emissiveIntensity = 0.55;
+  const tint = (m) => { const c = m.clone(); if (c.emissive) { c.emissive = new THREE.Color(0xf08a2e); c.emissiveIntensity = 0.55; } return c; };
+  meshesOf(o).forEach((m) => { m.userData._mat = m.material; m.material = Array.isArray(m.material) ? m.material.map(tint) : tint(m.material); });
   selected = o;
   pick.innerHTML = describe(o);
 }
@@ -364,8 +421,11 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   if (!introDone || !downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
   ndc.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
   ray.setFromCamera(ndc, camera);
-  const hit = ray.intersectObjects([...tables.values()], false)[0];
-  select(hit ? hit.object : null);
+  const hit = ray.intersectObjects([...tables.values()], true)[0];
+  let o = hit ? hit.object : null;
+  const set = new Set(tables.values());
+  while (o && !set.has(o)) o = o.parent;      // climb to the table node that owns this mesh
+  select(o);
 });
 function focusTable(o) {
   const box = new THREE.Box3().setFromObject(o);
@@ -383,7 +443,7 @@ $('q').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('go').click
 // ---------------------------------------------------------------- UI: toggles and 3D controls
 $('roofs').onclick = () => { roofsOn = !roofsOn; $('roofs').classList.toggle('on', !roofsOn); $('roofs').setAttribute('aria-pressed', roofsOn); roofs.forEach((r) => (r.visible = roofsOn)); };
 $('party').onclick = () => { partyOn = !partyOn; $('party').classList.toggle('on', partyOn); $('party').setAttribute('aria-pressed', partyOn); applyLighting(); };
-const initialLook = LOOKS[params.get('look')] ? params.get('look') : 'photo';
+const initialLook = LOOKS[params.get('look')] ? params.get('look') : 'detailed';
 $('look').value = initialLook;
 $('look').onchange = (e) => loadLook(e.target.value);
 
@@ -402,7 +462,7 @@ $('rotL').onclick = () => orbitStep(-Math.PI / 8, 0, 1);
 $('rotR').onclick = () => orbitStep(Math.PI / 8, 0, 1);
 $('tiltUp').onclick = () => orbitStep(0, -Math.PI / 12, 1);
 $('tiltDown').onclick = () => orbitStep(0, Math.PI / 12, 1);
-$('viewTop').onclick = () => flyTo(new THREE.Vector3(0, 138, -5.5), new THREE.Vector3(0, 0, -14), 1.4);
+$('viewTop').onclick = () => flyTo(topView.pos, topView.target, 1.4);
 $('viewReset').onclick = () => flyTo(HOME.pos, HOME.target, 1.4);
 addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || !introDone) return;
@@ -447,7 +507,7 @@ renderer.setAnimationLoop(() => {
     partyLights.forEach((l, i) => {
       if (!l.spot) return;
       const a = t * 0.9 + l.phase;
-      l.spot.target.position.set(Math.sin(a) * 9 + (i - 2.5) * 2.5, 0, -9 + Math.cos(a * 0.7) * 6);
+      l.spot.target.position.set(rig.floor.x + Math.sin(a) * 9 + (i - 2.5) * 2.5, rig.floor.y, rig.floor.z + Math.cos(a * 0.7) * 6);
       l.spot.intensity = 220 + 90 * Math.sin(t * 3 + l.phase);
       // aim the visible cone at the target
       tmpV.copy(l.spot.target.position).sub(l.spot.position);
